@@ -57,7 +57,12 @@ cask "ramble" do
   ]
 
   caveats <<~EOS
-    Ramble needs two permissions. Both are prompted on first launch:
+    FIRST LAUNCH: macOS blocks Ramble before it ever runs, because it is
+    ad-hoc signed rather than notarized. Nothing appears to happen.
+
+      System Settings > Privacy & Security > Security > "Open Anyway"
+
+    Once per install. Then Ramble needs two permissions, both prompted:
 
       System Settings > Privacy & Security > Bluetooth       (read the button)
       System Settings > Privacy & Security > Accessibility   (send the hotkey)

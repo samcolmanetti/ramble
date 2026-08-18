@@ -46,10 +46,20 @@ Installs `Ramble.app`, puts the diagnostic tools on your `PATH`, and registers a
 LaunchAgent so it starts at login and restarts if it dies.
 
 > [!IMPORTANT]
-> **Two permissions, both prompted on first launch.** Without Accessibility,
-> everything connects and nothing types — the menu bar warns you when it's missing.
+> **First launch: macOS blocks it, silently.** Ramble is ad-hoc signed, not
+> notarized, so Gatekeeper stops it before it runs and nothing appears to happen.
+> Once per install:
+>
+> **System Settings → Privacy & Security → Security → "Open Anyway"**
+
+> [!NOTE]
+> **Then two permissions, both prompted.** Without Accessibility, everything
+> connects and nothing types — the menu bar warns you when it's missing.
 >
 > 🔵 **Bluetooth** · read the button &nbsp;&nbsp;|&nbsp;&nbsp; ♿️ **Accessibility** · send the key
+>
+> Building [from source](#%EF%B8%8F-build-from-source) skips the Gatekeeper step
+> entirely — a locally built app is never quarantined.
 
 <details>
 <summary><b>🔧 Then set up the mic — one minute, once per machine</b></summary>

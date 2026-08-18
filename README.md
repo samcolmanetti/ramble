@@ -22,7 +22,7 @@ Requires the Swift toolchain. **Xcode is not needed** — Command Line Tools are
 enough (`xcode-select --install`).
 
 ```sh
-swift run ramble-check       # test suite — 111 checks, no hardware needed
+swift run ramble-check       # test suite — 120 checks, no hardware needed
 Scripts/bundle.sh            # assemble build/Ramble.app
 open build/Ramble.app
 ```
@@ -74,8 +74,8 @@ it changes.
       "name": "Claude Code voice",
       "bundleIDs": ["com.mitchellh.ghostty", "com.googlecode.iterm2"],
       "mode": "toggle",
-      "onStart": { "key": "space", "mods": ["shift"] },
-      "onStop":  { "key": "space", "mods": ["shift"] }
+      "onStart": { "key": "space" },
+      "onStop":  { "key": "space" }
     }
   ]
 }
@@ -92,6 +92,11 @@ it changes.
 - **`"onStart": null` mutes an app** entirely — useful for a password manager.
 - **`{"shell": "..."}`** works instead of a key, for anything driven by a URL
   scheme or CLI.
+- **Avoid modifiers on terminal targets.** Terminals send the same byte for
+  Space and Shift+Space unless the Kitty keyboard protocol's disambiguation
+  mode happens to be active, and Ghostty was observed dropping Cmd entirely on
+  the way to the TUI. Global hotkeys like Wispr Flow's Fn are intercepted
+  before the terminal, so they're unaffected.
 
 Find a bundle ID with:
 

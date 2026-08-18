@@ -33,6 +33,15 @@ cp ".build/$CONFIG/Ramble" "$APP/Contents/MacOS/Ramble"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" \
     Resources/Info.plist > "$APP/Contents/Info.plist"
 
+# Ship the CLI tools inside the bundle. A Homebrew cask can expose them with
+# `binary` stanzas pointing here, so one artifact covers both the menu bar app
+# and the diagnostics -- and the diagnostics are what make a silent failure
+# debuggable on someone else's machine.
+for tool in ramble-sniff ramble-tap ramble-level ramble-check; do
+    swift build -c "$CONFIG" --product "$tool" >/dev/null
+    cp ".build/$CONFIG/$tool" "$APP/Contents/MacOS/$tool"
+done
+
 # Signing. A stable identity keeps TCC grants across rebuilds; ad-hoc does not.
 if security find-certificate -c "$IDENTITY" >/dev/null 2>&1; then
     echo "▸ signing with \"$IDENTITY\""

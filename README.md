@@ -103,69 +103,86 @@ osascript -e 'id of app "Wispr Flow"'
 
 ## Distributing to another Mac
 
-There's no signed, notarized release — that needs a paid Apple Developer
-account, and this is a personal tool. Pick whichever of these fits.
-
-### 1. Build from source (recommended)
-
-The other machine needs Command Line Tools and nothing else:
+Via Homebrew, from [samcolmanetti/homebrew-tap](https://github.com/samcolmanetti/homebrew-tap):
 
 ```sh
-xcode-select --install
-git clone <this repo> && cd ramble
-Scripts/make-signing-cert.sh    # optional but worth it
-Scripts/bundle.sh --release
-cp -R build/Ramble.app /Applications/
+brew install --cask samcolmanetti/tap/ramble
 ```
 
-No Gatekeeper friction at all, because the app is built locally rather than
-downloaded. This is the least annoying path by a wide margin.
+The cask installs `Ramble.app`, exposes `ramble-sniff`, `ramble-tap` and
+`ramble-level` on `PATH`, and registers a LaunchAgent so it starts at login and
+restarts if it dies.
 
-### 2. Copy the built `.app`
-
-You can copy `build/Ramble.app` directly — over AirDrop, a shared folder, a zip.
-Anything that arrives via download or AirDrop gets a **quarantine attribute**,
-and an ad-hoc-signed app then refuses to launch:
+### Cutting a release
 
 ```sh
-xattr -dr com.apple.quarantine /Applications/Ramble.app
+Scripts/release.sh 0.1.0            # build, zip, checksum, update the cask
+Scripts/release.sh 0.1.0 --publish  # ...and create the GitHub release
 ```
 
-Or right-click → Open once, and confirm.
+`release.sh` rewrites `version` and `sha256` in `Casks/ramble.rb`; copy that
+file into the tap and push.
 
-Note that an ad-hoc signature is **machine-specific in practice**: the receiving
-Mac sees a different signing identity than a locally built copy would, so
-permissions must be granted fresh there regardless.
+The zip is made with `ditto`, not `zip`, because `zip` can invalidate a bundle's
+code signature.
 
-### 3. Signed and notarized
+### The signing problem, honestly
 
-If you want this to install cleanly on machines you don't control, you need an
-Apple Developer Program membership ($99/yr), then:
+There's no Developer ID here, so builds are **ad-hoc signed**. That has one
+consequence worth stating plainly rather than burying:
+
+**Every upgrade breaks the permissions.** macOS ties Accessibility and Bluetooth
+grants to a binary's code signature; an ad-hoc signature is a content hash, so a
+new build is a different app as far as TCC is concerned. After
+`brew upgrade --cask ramble` you must toggle Accessibility off and back on. The
+cask's caveats say so, matching the same warning in
+`aerospace-swipe-intercept`.
+
+Fixing it properly means an Apple Developer Program membership ($99/yr):
 
 ```sh
-Scripts/bundle.sh --release --identity "Developer ID Application: Your Name (TEAMID)"
+Scripts/bundle.sh --release --identity "Developer ID Application: Name (TEAMID)"
 ditto -c -k --keepParent build/Ramble.app Ramble.zip
 xcrun notarytool submit Ramble.zip --apple-id … --team-id … --wait
 xcrun stapler staple build/Ramble.app
 ```
 
-Only worth it if you're handing this to people who won't run a build script.
+With a stable Developer ID the signature is identical across builds, so grants
+survive upgrades and Gatekeeper stops complaining. Worth it only if this goes to
+people who won't tolerate re-granting.
 
-### On every machine, regardless
+### Building from source instead
 
-Permissions are per-machine and can't be copied:
+Needs Command Line Tools and nothing else — no Xcode:
+
+```sh
+xcode-select --install
+git clone https://github.com/samcolmanetti/ramble && cd ramble
+Scripts/make-signing-cert.sh    # one-time; stable identity, grants survive rebuilds
+Scripts/bundle.sh --release
+cp -R build/Ramble.app /Applications/
+```
+
+A locally built app has no quarantine attribute, so there's no Gatekeeper
+friction at all. For your own machines this is the least annoying path.
+
+### Per-machine setup, regardless of install method
+
+Permissions can't be copied between machines:
 
 1. **Bluetooth** — prompted on first launch
-2. **Accessibility** — System Settings → Privacy & Security → Accessibility.
-   Without it, everything connects and nothing types. The menu bar shows a
-   warning when it's missing.
+2. **Accessibility** — without it, everything connects and nothing types. The
+   menu bar shows a warning when it's missing.
 
-And per-machine setup:
+Then:
 
 - Pair the Instamic and put it in **Bluetooth Microphone Mode**
 - **Quit the Instamic Remote app** — the device allows exactly one BLE central
-- Set your transcription app's hotkey, and match it in `config.json`
+- Set Sound output back to your speakers; macOS routes both directions to a
+  Bluetooth headset by default and drops all system audio to 16 kHz
+- Set your transcription app's hotkey and match it in `config.json`
 
 ### Start at login
 
-Drop `Ramble.app` in System Settings → General → Login Items.
+The cask installs a LaunchAgent that handles this. For a source build, drop
+`Ramble.app` into System Settings → General → Login Items.

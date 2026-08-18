@@ -349,6 +349,63 @@ do {
     expectEqual(shellCalls(), ["echo hi"], "shell action runs the command")
 }
 
+group("a held key is always released, however the take ends")
+do {
+    // The dangerous case: hold mode presses Fn, then the link drops. Without
+    // abort() the modifier stays physically down system-wide.
+    let config = Config(mode: .hold,
+                        defaultRule: Rule(name: "wispr", bundleIDs: [],
+                                          onStart: Action(key: "fn"),
+                                          onStop: Action(key: "fn")))
+    let keys = FakeKeystroke()
+    let m = TriggerMachine(config: config, frontmostBundleID: { nil },
+                           runShell: { _ in }, keystroke: keys)
+    _ = m.handle(START)
+    expectEqual(keys.pressed, ["🌐fn"], "fn is held down")
+    expectEqual(keys.released, [], "not released yet")
+
+    let outcome = m.abort(reason: "device disconnected")
+    expectEqual(keys.released, ["🌐fn"], "abort releases the held key")
+    expect(!m.isRecording, "abort returns to idle")
+    if case .fired(_, _, let action) = outcome {
+        expect(action.contains("device disconnected"), "abort reports why: \(action)")
+    } else {
+        expect(false, "abort should report a fired release, got \(outcome)")
+    }
+}
+
+group("aborting when nothing is held is harmless")
+do {
+    let (m, _, keys) = machine(frontmost: nil)
+    expect(isIgnored(m.abort(reason: "idle")), "abort while idle is a no-op")
+    expectEqual(keys.released, [], "nothing released")
+
+    // Toggle mode taps rather than holds, so there is nothing to lift.
+    _ = m.handle(START)
+    _ = m.abort(reason: "disconnected")
+    expectEqual(keys.released, [], "toggle-mode abort releases nothing")
+    expect(!m.isRecording, "but still returns to idle")
+}
+
+group("a take that never stops times out")
+do {
+    let config = Config(mode: .hold,
+                        defaultRule: Rule(name: "wispr", bundleIDs: [],
+                                          onStart: Action(key: "fn"),
+                                          onStop: Action(key: "fn")))
+    let keys = FakeKeystroke()
+    let m = TriggerMachine(config: config, frontmostBundleID: { nil },
+                           runShell: { _ in }, keystroke: keys)
+    m.maxTakeDuration = 0.2
+    _ = m.handle(START)
+    expect(m.checkTimeout() == nil, "no timeout before the deadline")
+    Thread.sleep(forTimeInterval: 0.3)
+    expect(m.checkTimeout() != nil, "timeout fires after the deadline")
+    expectEqual(keys.released, ["🌐fn"], "timeout releases the held key")
+    expect(!m.isRecording, "timeout returns to idle")
+    expect(m.checkTimeout() == nil, "timeout does not fire twice")
+}
+
 group("config round-trips through JSON")
 do {
     let original = Config.starter()

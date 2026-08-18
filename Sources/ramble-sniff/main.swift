@@ -120,6 +120,7 @@ final class Sniffer: BLEClientDelegate {
             scanningSince = nil
             print("\(stamp())  ✓ connected to \(n)")
         case .disconnected(let e):
+            scanningSince = nil
             print("\(stamp())  ✗ disconnected\(e.map { ": \($0)" } ?? "")")
         case .poweredOff:
             print("\(stamp())  bluetooth is off")
@@ -146,6 +147,25 @@ final class Sniffer: BLEClientDelegate {
     func bleLog(_ message: String) {
         sawBluetoothState = true
         print("\(stamp())  \(message)")
+    }
+
+    /// Print a trigger outcome on its own line, for events that aren't tied to
+    /// an incoming frame (aborts, timeouts).
+    func report(_ outcome: TriggerOutcome) {
+        switch outcome {
+        case .fired(let phase, let rule, let action):
+            print("\(stamp())  → \(phase.rawValue) \(action)  [\(rule)]")
+        case .failed(let phase, let reason):
+            print("\(stamp())  → \(phase.rawValue) FAILED: \(reason)")
+        case .nothingConfigured, .ignored:
+            break
+        }
+    }
+
+    func checkTakeTimeout() {
+        guard let machine, let outcome = machine.checkTimeout() else { return }
+        print("\(stamp())  ⚠️  take exceeded the safety timeout")
+        report(outcome)
     }
 
     func bleDidReceiveMalformed(raw: [UInt8], error: FrameError) {
@@ -398,11 +418,19 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
 
 let stallTimer = DispatchSource.makeTimerSource(queue: .main)
 stallTimer.schedule(deadline: .now() + 15, repeating: 15)
-stallTimer.setEventHandler { sniffer.checkForStall() }
+stallTimer.setEventHandler {
+    sniffer.checkForStall()
+    sniffer.checkTakeTimeout()
+}
 stallTimer.resume()
 
 let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 sigint.setEventHandler {
+    // Never exit leaving a modifier pressed. Ctrl-C during a hold-mode take
+    // would otherwise wedge the keyboard system-wide.
+    if let machine, machine.isRecording {
+        sniffer.report(machine.abort(reason: "interrupted"))
+    }
     sniffer.summary()
     exit(0)
 }

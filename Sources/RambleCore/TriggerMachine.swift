@@ -31,7 +31,9 @@ public enum TriggerOutcome: Equatable {
 public final class TriggerMachine {
     private enum State: Equatable {
         case idle
-        case recording(rule: Rule)
+        /// `held` is the chord currently pressed down in hold mode, remembered
+        /// so it can be released if the take never ends normally.
+        case recording(rule: Rule, held: KeyChord?, since: Date)
     }
 
     private var state: State = .idle
@@ -58,6 +60,48 @@ public final class TriggerMachine {
         return false
     }
 
+    /// A take is abandoned after this long. Guards against a stop frame that
+    /// never arrives — without it, a missed stop in hold mode leaves a modifier
+    /// pressed indefinitely.
+    public var maxTakeDuration: TimeInterval = 300
+
+    /// How long the current take has been running, if any.
+    public var takeDuration: TimeInterval? {
+        guard case .recording(_, _, let since) = state else { return nil }
+        return Date().timeIntervalSince(since)
+    }
+
+    /// End the current take without treating it as a normal stop, releasing any
+    /// key being held. Call this on disconnect, on shutdown, and on timeout.
+    ///
+    /// This is the difference between a dropped connection being an
+    /// inconvenience and it wedging the keyboard: in hold mode the modifier is
+    /// physically down, and nothing else will ever lift it.
+    @discardableResult
+    public func abort(reason: String) -> TriggerOutcome {
+        guard case .recording(_, let held, _) = state else {
+            return .ignored(reason: "nothing to abort")
+        }
+        state = .idle
+        guard let held else {
+            return .ignored(reason: "take abandoned: \(reason)")
+        }
+        do {
+            try keystroke.release(held)
+            return .fired(phase: .stop, rule: "abort", action: "released \(held.description) — \(reason)")
+        } catch {
+            return .failed(phase: .stop, reason: "could not release \(held.description): \(error)")
+        }
+    }
+
+    /// Abort if the current take has outlived `maxTakeDuration`. Drive this from
+    /// a timer.
+    @discardableResult
+    public func checkTimeout() -> TriggerOutcome? {
+        guard let duration = takeDuration, duration > maxTakeDuration else { return nil }
+        return abort(reason: String(format: "no stop after %.0fs", duration))
+    }
+
     /// Seed the state from the device's own recording flag (FCC1 `f9c13108`
     /// offset 6) rather than inferring it. Only meaningful at connect time.
     ///
@@ -65,11 +109,11 @@ public final class TriggerMachine {
     /// mid-recording tells us nothing about whether a dictation session was ever
     /// started on the Mac side.
     public func adoptDeviceState(recording: Bool) {
-        state = .idle
+        abort(reason: "reconnected")
         _ = recording
     }
 
-    public func reset() { state = .idle }
+    public func reset() { abort(reason: "reset") }
 
     @discardableResult
     public func handle(_ event: RecordEvent) -> TriggerOutcome {
@@ -79,11 +123,11 @@ public final class TriggerMachine {
                 return .ignored(reason: "already recording")
             }
             let rule = config.rule(for: frontmostBundleID())
-            state = .recording(rule: rule)
+            state = .recording(rule: rule, held: nil, since: Date())
             return perform(rule.onStart, phase: .start, rule: rule)
 
         case .stopPress:
-            guard case .recording(let rule) = state else {
+            guard case .recording(let rule, _, _) = state else {
                 return .ignored(reason: "stop press with no active take")
             }
             state = .idle
@@ -92,7 +136,7 @@ public final class TriggerMachine {
         case .recordStopped:
             // Normally already idle, because 02 [44 02] arrived ~1.5 s earlier
             // and handled the stop. Reaching here means that frame was missed.
-            guard case .recording(let rule) = state else {
+            guard case .recording(let rule, _, _) = state else {
                 return .ignored(reason: "stop already handled or no active take")
             }
             state = .idle
@@ -129,9 +173,16 @@ public final class TriggerMachine {
         case .success(let chord):
             do {
                 switch (rule.mode ?? config.mode, phase) {
-                case (.hold, .start): try keystroke.press(chord)
-                case (.hold, .stop): try keystroke.release(chord)
-                default: try keystroke.tap(chord)
+                case (.hold, .start):
+                    try keystroke.press(chord)
+                    // Remember what is physically down so abort() can lift it.
+                    if case .recording(let r, _, let since) = state {
+                        state = .recording(rule: r, held: chord, since: since)
+                    }
+                case (.hold, .stop):
+                    try keystroke.release(chord)
+                default:
+                    try keystroke.tap(chord)
                 }
                 return .fired(phase: phase, rule: name, action: chord.description)
             } catch {

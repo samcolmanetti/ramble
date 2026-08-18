@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# This workflow only builds and tests. It never publishes a release or writes to
+# the repo, so the token needs nothing beyond reading the checkout.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # macOS because the package links CoreBluetooth, AppKit and CoreGraphics.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Swift version
+        run: swift --version
+
+      - name: Build
+        run: swift build
+
+      # ramble-check is a plain executable rather than a test target: XCTest and
+      # swift-testing both ship inside Xcode, and the package is built to work
+      # with Command Line Tools alone. It exits non-zero on failure, so it
+      # behaves like any other test command here.
+      - name: Run checks
+        run: swift run ramble-check
+
+      # The app bundle is what the Homebrew cask ships, so a break in the
+      # assembly or signing steps should fail here rather than at release time.
+      - name: Assemble the app bundle
+        run: Scripts/bundle.sh

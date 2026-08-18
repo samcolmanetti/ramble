@@ -1,6 +1,6 @@
 cask "ramble" do
   version "0.1.0"
-  sha256 :no_check
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
 
   url "https://github.com/samcolmanetti/ramble/releases/download/v#{version}/Ramble-v#{version}.zip"
   name "Ramble"

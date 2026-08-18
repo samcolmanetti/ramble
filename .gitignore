@@ -5,4 +5,5 @@
 Package.resolved
 build/
 
-build/
+# Review/plan run artifacts — machine-generated, not part of the source.
+.context/

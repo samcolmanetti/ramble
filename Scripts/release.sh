@@ -11,8 +11,22 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:?usage: release.sh <version> [--publish]}"
 VERSION="${VERSION#v}"
+
+# The version is written into the cask and used as the release tag, so a typo
+# here becomes a bad tag and a cask pointing at a URL that does not exist.
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+    echo "error: '$VERSION' is not a version like 0.1.0" >&2
+    exit 2
+fi
+
 PUBLISH=false
-[[ "${2:-}" == "--publish" ]] && PUBLISH=true
+case "${2:-}" in
+    "")        ;;
+    --publish) PUBLISH=true ;;
+    # Silently ignoring this used to mean a mistyped --publish just did not
+    # publish, with a success exit code and no hint why.
+    *)         echo "error: unknown option '$2' (expected --publish)" >&2; exit 2 ;;
+esac
 
 REPO="samcolmanetti/ramble"
 ZIP="build/Ramble-v${VERSION}.zip"
@@ -34,6 +48,20 @@ echo "  sha256 $SHA"
 echo "▸ updating Casks/ramble.rb"
 sed -i '' -e "s|^  version \".*\"|  version \"${VERSION}\"|" \
           -e "s|^  sha256 \".*\"|  sha256 \"${SHA}\"|" Casks/ramble.rb
+
+# Verify the substitution actually landed. It silently did not for the whole of
+# this cask's life: the file held `sha256 :no_check`, which the quoted pattern
+# above can never match, so every release would have shipped unverified while
+# this script printed a checksum as if it had written one.
+if ! grep -q "^  sha256 \"${SHA}\"$" Casks/ramble.rb; then
+    echo "error: failed to write the checksum into Casks/ramble.rb" >&2
+    echo "       the cask still reads: $(grep '^  sha256' Casks/ramble.rb)" >&2
+    exit 1
+fi
+if ! grep -q "^  version \"${VERSION}\"$" Casks/ramble.rb; then
+    echo "error: failed to write the version into Casks/ramble.rb" >&2
+    exit 1
+fi
 
 if [[ "$PUBLISH" == true ]]; then
     echo "▸ publishing v${VERSION} to $REPO"

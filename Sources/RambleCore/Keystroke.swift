@@ -52,12 +52,17 @@ public enum KeystrokeError: Error, Equatable, CustomStringConvertible {
     case unknownKey(String)
     case unknownModifier(String)
     case notTrusted
+    /// CGEvent would not allocate. Rare, but it must not be mistaken for a
+    /// successful post: `release` reporting success it did not achieve is
+    /// exactly how a held key gets forgotten while still down.
+    case eventCreationFailed
 
     public var description: String {
         switch self {
         case .unknownKey(let k): return "unknown key \"\(k)\""
         case .unknownModifier(let m): return "unknown modifier \"\(m)\""
         case .notTrusted: return "Accessibility permission not granted"
+        case .eventCreationFailed: return "could not create the keyboard event"
         }
     }
 }
@@ -165,13 +170,15 @@ public struct Keystroke: KeystrokeEmitting {
 
     public init() {}
 
-    private func post(_ chord: KeyChord, down: Bool) {
+    private func post(_ chord: KeyChord, down: Bool) throws {
         // .hidSystemState makes the event look like it came from real hardware,
         // which some apps check for.
         let source = CGEventSource(stateID: .hidSystemState)
         guard let event = CGEvent(keyboardEventSource: source,
                                   virtualKey: chord.keyCode,
-                                  keyDown: down) else { return }
+                                  keyDown: down) else {
+            throw KeystrokeError.eventCreationFailed
+        }
 
         if Keys.isModifier(chord.keyCode) {
             // A modifier is reported by its flag changing, not by a key going
@@ -189,19 +196,19 @@ public struct Keystroke: KeystrokeEmitting {
     /// Full press and release — the normal case.
     public func tap(_ chord: KeyChord) throws {
         guard Keystroke.isTrusted else { throw KeystrokeError.notTrusted }
-        post(chord, down: true)
-        post(chord, down: false)
+        try post(chord, down: true)
+        try post(chord, down: false)
     }
 
     /// Press and hold. Only used in push-to-talk mode; must be paired with
     /// `release`, or the key stays down system-wide.
     public func press(_ chord: KeyChord) throws {
         guard Keystroke.isTrusted else { throw KeystrokeError.notTrusted }
-        post(chord, down: true)
+        try post(chord, down: true)
     }
 
     public func release(_ chord: KeyChord) throws {
         guard Keystroke.isTrusted else { throw KeystrokeError.notTrusted }
-        post(chord, down: false)
+        try post(chord, down: false)
     }
 }

@@ -35,6 +35,9 @@ public struct Rule: Codable, Equatable {
     public var name: String?
     public var bundleIDs: [String]
     public var onStart: Action?
+    /// What to fire when the take ends — in `toggle` mode only. `hold` mode
+    /// releases whatever `onStart` pressed and never consults this, so it may
+    /// be omitted entirely for a push-to-talk rule. See `TriggerMode.hold`.
     public var onStop: Action?
     /// Overrides the global mode for this rule. Necessary because different
     /// targets want opposite semantics: Wispr Flow's push-to-talk is a held Fn,
@@ -72,8 +75,14 @@ public enum TriggerMode: String, Codable {
     /// Fire a full key tap on both start and stop. The Instamic's button is
     /// itself a toggle, so this is the natural fit and the default.
     case toggle
-    /// Hold the key down between start and stop. Riskier: some apps ignore
+    /// Hold the key down between start and stop. Required for true
+    /// push-to-talk, and the exception rather than the rule — some apps ignore
     /// multi-second synthetic holds, and a crash mid-hold leaves a stuck key.
+    ///
+    /// In this mode `onStop` is **ignored**: ending a hold means lifting
+    /// whatever is physically down, so the chord pressed at start is the chord
+    /// released at stop. Deriving the release from `onStop` is what used to
+    /// strand a modifier when it was missing or named a different key.
     case hold
 }
 
@@ -109,6 +118,13 @@ public struct Config: Codable, Equatable {
         self.activeTarget = activeTarget
         self.rules = rules
         self.defaultRule = defaultRule
+    }
+
+    /// Spelled out rather than synthesized so `save()` can tell a key this
+    /// version does not model from one that is merely absent because its
+    /// optional is nil.
+    private enum CodingKeys: String, CodingKey, CaseIterable {
+        case mode, autoReconnect, showMenuBarIcon, targets, activeTarget, rules, defaultRule
     }
 
     public init(from decoder: Decoder) throws {
@@ -205,7 +221,57 @@ public struct Config: Codable, Equatable {
                                                 withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try encoder.encode(self).write(to: url, options: .atomic)
+        var data = try encoder.encode(self)
+
+        // Carry over top-level keys this version does not model. Without this,
+        // clicking a menu item silently deletes anything hand-added to the file
+        // — and anything a newer Ramble wrote, which is the same file after a
+        // downgrade.
+        if let existing = try? Data(contentsOf: url),
+           let old = try? JSONSerialization.jsonObject(with: existing) as? [String: Any],
+           var merged = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            // Only keys this version does not model at all. Testing "absent from
+            // the fresh encode" instead would also match a modelled optional
+            // that is deliberately nil, resurrecting the value the user just
+            // cleared.
+            let modelled = Set(CodingKeys.allCases.map(\.rawValue))
+            let unknown = old.filter { !modelled.contains($0.key) }
+            if !unknown.isEmpty {
+                for (key, value) in unknown { merged[key] = value }
+                data = try JSONSerialization.data(withJSONObject: merged,
+                                                  options: [.prettyPrinted, .sortedKeys])
+            }
+        }
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// A decoding failure that names the key at fault.
+    ///
+    /// `Error.localizedDescription` on a `DecodingError` is a generic Foundation
+    /// sentence that names nothing, which is no help at all when the actual
+    /// problem is one mistyped key in a file the user hand-edited.
+    package static func describe(_ error: Error) -> String {
+        guard let decoding = error as? DecodingError else {
+            return error.localizedDescription
+        }
+        func where_(_ context: DecodingError.Context) -> String {
+            let keys = context.codingPath.map(\.stringValue).filter { !$0.isEmpty }
+            return keys.isEmpty ? "the top level" : "\"" + keys.joined(separator: ".") + "\""
+        }
+        switch decoding {
+        case .keyNotFound(let key, let context):
+            return "missing key \"\(key.stringValue)\" at \(where_(context))"
+        case .typeMismatch(let type, let context):
+            return "wrong type at \(where_(context)) — expected \(type)"
+        case .valueNotFound(let type, let context):
+            return "null at \(where_(context)) where a \(type) was expected"
+        case .dataCorrupted(let context):
+            return context.codingPath.isEmpty
+                ? "not valid JSON: \(context.debugDescription)"
+                : "bad value at \(where_(context)): \(context.debugDescription)"
+        @unknown default:
+            return error.localizedDescription
+        }
     }
 
     /// Load, or write and return the starter config if none exists yet.

@@ -20,6 +20,19 @@ public enum BLEState: Equatable {
     case connecting(String)
     case connected(String)
     case disconnected(String?)
+
+    /// Why an in-flight take must be abandoned in this state, or nil if it can
+    /// continue. Any of these means no stop frame is ever arriving, and in hold
+    /// mode a modifier is physically down waiting for one.
+    package var abortReason: String? {
+        switch self {
+        case .disconnected: return "device disconnected"
+        case .poweredOff:   return "Bluetooth turned off"
+        case .unauthorized: return "Bluetooth permission revoked"
+        case .unsupported:  return "Bluetooth unavailable"
+        case .connected, .connecting, .scanning: return nil
+        }
+    }
 }
 
 /// Everything the client reports back. The CLI prints these; the menu bar app

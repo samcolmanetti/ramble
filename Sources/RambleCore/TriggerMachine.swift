@@ -36,8 +36,13 @@ public final class TriggerMachine {
     private enum State: Equatable {
         case idle
         /// `held` is the chord currently pressed down in hold mode, remembered
-        /// so it can be released if the take never ends normally.
-        case recording(rule: Rule, held: KeyChord?, since: Date)
+        /// so it can be released however the take ends — including when the
+        /// rule's `onStop` is missing or names a different key.
+        ///
+        /// `mode` is resolved once, at the start of the take. Reading it live at
+        /// stop time let a config reload land mid-take and pair a hold press
+        /// with a tap stop, which strands the pressed key.
+        case recording(rule: Rule, mode: TriggerMode, held: KeyChord?, since: Date)
     }
 
     private var state: State = .idle
@@ -47,11 +52,12 @@ public final class TriggerMachine {
     /// Injected so the machine is testable without a window server.
     public var frontmostBundleID: () -> String?
     /// Injected so tests can observe shell actions instead of running them.
-    public var runShell: (String) -> Void
+    /// Throwing means the command could not be launched at all.
+    public var runShell: (String) throws -> Void
 
     public init(config: Config,
                 frontmostBundleID: @escaping () -> String? = TriggerMachine.systemFrontmostBundleID,
-                runShell: @escaping (String) -> Void = TriggerMachine.systemRunShell,
+                runShell: @escaping (String) throws -> Void = TriggerMachine.systemRunShell,
                 keystroke: KeystrokeEmitting = Keystroke()) {
         self.config = config
         self.frontmostBundleID = frontmostBundleID
@@ -87,7 +93,7 @@ public final class TriggerMachine {
 
     /// How long the current take has been running, if any.
     public var takeDuration: TimeInterval? {
-        guard case .recording(_, _, let since) = state else { return nil }
+        guard case .recording(_, _, _, let since) = state else { return nil }
         return Date().timeIntervalSince(since)
     }
 
@@ -99,18 +105,74 @@ public final class TriggerMachine {
     /// physically down, and nothing else will ever lift it.
     @discardableResult
     public func abort(reason: String) -> TriggerOutcome {
-        guard case .recording(_, let held, _) = state else {
+        guard case .recording(_, _, let held, _) = state else {
             return .ignored(reason: "nothing to abort")
         }
-        state = .idle
         guard let held else {
+            state = .idle
             return .ignored(reason: "take abandoned: \(reason)")
         }
+        // Lift first, and only report success if the lift succeeded. The take is
+        // over either way, but a failed release keeps the chord in
+        // `pendingRelease` so the next tick can try again.
         do {
             try keystroke.release(held)
+            state = .idle
+            clearPending(held)
             return .fired(phase: .stop, rule: "abort", action: "released \(held.description) — \(reason)")
         } catch {
-            return .failed(phase: .stop, reason: "could not release \(held.description): \(error)")
+            state = .idle
+            pendingRelease = held
+            return .failed(phase: .stop,
+                           reason: "could not release \(held.description): \(error)"
+                                 + " — still down, will retry")
+        }
+    }
+
+    /// A chord that is physically down but could not be lifted — Accessibility
+    /// revoked mid-take is the realistic cause, since `Keystroke.isTrusted` can
+    /// go false while the app is running.
+    ///
+    /// This is the one piece of state that outlives a take on purpose. It
+    /// represents a key on a real keyboard, not a configuration, so it is kept
+    /// until a release actually succeeds. Discarding it on the failing path is
+    /// exactly how a stuck key becomes unrecoverable.
+    package private(set) var pendingRelease: KeyChord?
+
+    /// Retry an outstanding release. Drive this from the same timer as
+    /// `checkTimeout()`; it is a no-op when nothing is stuck.
+    @discardableResult
+    package func retryPendingRelease() -> TriggerOutcome? {
+        guard let chord = pendingRelease else { return nil }
+        do {
+            try keystroke.release(chord)
+            pendingRelease = nil
+            return .fired(phase: .stop, rule: "recovery",
+                          action: "released \(chord.description) after an earlier failure")
+        } catch {
+            return .failed(phase: .stop,
+                           reason: "\(chord.description) is still down: \(error)")
+        }
+    }
+
+    /// Forget the outstanding stuck key only if this is the key that just came
+    /// up. Clearing unconditionally meant a later take releasing a *different*
+    /// chord erased the record of the first one, which is still physically down
+    /// — the exact thing `pendingRelease` exists to prevent.
+    private func clearPending(_ released: KeyChord) {
+        if pendingRelease == released { pendingRelease = nil }
+    }
+
+    private func releaseHeld(_ chord: KeyChord, rule: String) -> TriggerOutcome {
+        do {
+            try keystroke.release(chord)
+            clearPending(chord)
+            return .fired(phase: .stop, rule: rule, action: chord.description)
+        } catch {
+            pendingRelease = chord
+            return .failed(phase: .stop,
+                           reason: "could not release \(chord.description): \(error)"
+                                 + " — still down, will retry")
         }
     }
 
@@ -120,17 +182,6 @@ public final class TriggerMachine {
     public func checkTimeout() -> TriggerOutcome? {
         guard let duration = takeDuration, duration > maxTakeDuration else { return nil }
         return abort(reason: String(format: "no stop after %.0fs", duration))
-    }
-
-    /// Seed the state from the device's own recording flag (FCC1 `f9c13108`
-    /// offset 6) rather than inferring it. Only meaningful at connect time.
-    ///
-    /// Note this deliberately does *not* fire a start action: the device being
-    /// mid-recording tells us nothing about whether a dictation session was ever
-    /// started on the Mac side.
-    public func adoptDeviceState(recording: Bool) {
-        abort(reason: "reconnected")
-        _ = recording
     }
 
     public func reset() {
@@ -144,20 +195,10 @@ public final class TriggerMachine {
         switch event {
         case .recordStarted:
             let now = Date()
-            recentStarts.append(now)
-            recentStarts.removeAll { now.timeIntervalSince($0) > runawayWindow }
-            if recentStarts.count > runawayLimit {
-                runawayTripped = true
-                abort(reason: "runaway guard")
-                return .failed(phase: .start,
-                               reason: "\(recentStarts.count) starts in "
-                                     + "\(Int(runawayWindow))s — firing paused. "
-                                     + "Check the mic's battery and button.")
-            }
             if runawayTripped {
                 return .ignored(reason: "firing paused by the runaway guard")
             }
-            if case .recording(_, _, let since) = state {
+            if case .recording(_, _, _, let since) = state {
                 let age = Date().timeIntervalSince(since)
                 guard age > duplicateWindow else {
                     return .ignored(reason: "duplicate start")
@@ -169,9 +210,26 @@ public final class TriggerMachine {
                 // dying and never coming back.
                 abort(reason: String(format: "stale take, %.0fs old", age))
             }
+            // Count only starts that survive the duplicate check. Counting
+            // before it meant one physical press registering twice ate two of
+            // the twelve slots, halving the real budget to about six takes a
+            // minute — reachable in ordinary rapid dictation.
+            recentStarts.append(now)
+            recentStarts.removeAll { now.timeIntervalSince($0) > runawayWindow }
+            if recentStarts.count > runawayLimit {
+                runawayTripped = true
+                abort(reason: "runaway guard")
+                return .failed(phase: .start,
+                               reason: "\(recentStarts.count) starts in "
+                                     + "\(Int(runawayWindow))s — firing paused. "
+                                     + "Check the mic's battery and button.")
+            }
             let rule = config.rule(for: frontmostBundleID())
-            state = .recording(rule: rule, held: nil, since: Date())
-            return perform(rule.onStart, phase: .start, rule: rule)
+            // Resolve the mode once, here. Everything the stop path needs is
+            // fixed at the moment the take begins.
+            let mode = rule.mode ?? config.mode
+            state = .recording(rule: rule, mode: mode, held: nil, since: Date())
+            return perform(rule.onStart, phase: .start, rule: rule, mode: mode, held: nil)
 
         case .stopPress:
             // Ambiguous: fires both on a 15-second timer and at the real press.
@@ -179,11 +237,11 @@ public final class TriggerMachine {
             return .ignored(reason: "02 [44 02] is ambiguous — waiting for 0x36")
 
         case .recordStopped:
-            guard case .recording(let rule, _, _) = state else {
+            guard case .recording(let rule, let mode, let held, _) = state else {
                 return .ignored(reason: "stop with no active take")
             }
             state = .idle
-            return perform(rule.onStop, phase: .stop, rule: rule)
+            return perform(rule.onStop, phase: .stop, rule: rule, mode: mode, held: held)
 
         case .startPress:
             return .ignored(reason: "start press (0x35 follows)")
@@ -196,15 +254,35 @@ public final class TriggerMachine {
 
     private func perform(_ action: Action?,
                          phase: TriggerOutcome.Phase,
-                         rule: Rule) -> TriggerOutcome {
+                         rule: Rule,
+                         mode: TriggerMode,
+                         held: KeyChord?) -> TriggerOutcome {
         let name = rule.name ?? rule.bundleIDs.first ?? "default"
+
+        // Ending a hold means lifting whatever is physically down. That is
+        // decided by what was pressed, not by what `onStop` says — so this runs
+        // before any inspection of the action, which may be absent entirely.
+        // Getting this backwards is what used to strand a modifier forever.
+        if mode == .hold, phase == .stop {
+            guard let held else {
+                return .nothingConfigured(phase: phase, rule: name)
+            }
+            return releaseHeld(held, rule: name)
+        }
+
         guard let action, !action.isEmpty else {
             return .nothingConfigured(phase: phase, rule: name)
         }
 
         if let shell = action.shell {
-            runShell(shell)
-            return .fired(phase: phase, rule: name, action: "shell: \(shell)")
+            // `try?` here used to swallow a failed launch and still report
+            // .fired, so a shell action with a bad path looked like it worked.
+            do {
+                try runShell(shell)
+                return .fired(phase: phase, rule: name, action: "shell: \(shell)")
+            } catch {
+                return .failed(phase: phase, reason: "shell: \(shell) — \(error)")
+            }
         }
 
         guard let result = action.chord() else {
@@ -215,15 +293,14 @@ public final class TriggerMachine {
             return .failed(phase: phase, reason: error.description)
         case .success(let chord):
             do {
-                switch (rule.mode ?? config.mode, phase) {
+                switch (mode, phase) {
                 case (.hold, .start):
                     try keystroke.press(chord)
-                    // Remember what is physically down so abort() can lift it.
-                    if case .recording(let r, _, let since) = state {
-                        state = .recording(rule: r, held: chord, since: since)
+                    // Remember what is physically down so the stop path and
+                    // abort() can lift exactly this, whatever onStop says.
+                    if case .recording(let r, let m, _, let since) = state {
+                        state = .recording(rule: r, mode: m, held: chord, since: since)
                     }
-                case (.hold, .stop):
-                    try keystroke.release(chord)
                 default:
                     try keystroke.tap(chord)
                 }
@@ -243,16 +320,16 @@ public extension TriggerMachine {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier
     }
 
-    static func systemRunShell(_ command: String) {
+    static func systemRunShell(_ command: String) throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", command]
-        try? process.run()
+        try process.run()
     }
 }
 #else
 public extension TriggerMachine {
     static func systemFrontmostBundleID() -> String? { nil }
-    static func systemRunShell(_ command: String) {}
+    static func systemRunShell(_ command: String) throws {}
 }
 #endif

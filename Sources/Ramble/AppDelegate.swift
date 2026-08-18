@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         applyMenuBarVisibility()
         watchConfigFile()
+        installSignalHandlers()
     }
 
     /// Create or tear down the status item to match the config.
@@ -51,10 +52,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Never quit leaving a modifier pressed.
-        if machine.isRecording { machine.abort(reason: "quitting") }
-        client.stop()
+        shutDown(reason: "quitting")
     }
+
+    /// Release anything held and stop the radio. Safe to call twice.
+    ///
+    /// Split out of `applicationWillTerminate` because that only runs for an
+    /// Apple Event quit. launchd sends SIGTERM — on `launchctl bootout`, on a
+    /// `brew upgrade` replacing the binary, and at logout — which by default
+    /// kills the process outright, taking any held modifier with it and leaving
+    /// the key down with nothing left running to lift it.
+    private func shutDown(reason: String) {
+        if machine?.isRecording == true {
+            record(machine.abort(reason: reason))
+        }
+        // The take is over, but the key may not have come up. There is no timer
+        // after this point, so retry here or never.
+        for _ in 0 ..< 3 where machine?.pendingRelease != nil {
+            _ = machine.retryPendingRelease()
+        }
+        if let stuck = machine?.pendingRelease {
+            EventLog.shared.write("QUIT WITH \(stuck.description) STILL DOWN — "
+                                + "press and release it manually to clear it")
+        }
+        client?.stop()
+    }
+
+    /// SIGTERM arrives outside AppKit's lifecycle, so it needs its own handler.
+    private func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT] {
+            // Ignore the default disposition so the dispatch source sees it
+            // instead of the process dying immediately.
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler { [weak self] in
+                self?.shutDown(reason: "terminated")
+                exit(0)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    private var signalSources: [DispatchSourceSignal] = []
 
     // MARK: - Config
 
@@ -62,6 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let (loaded, created) = try Config.loadOrCreate()
             config = loaded
+            configIsFromDisk = true
             if machine == nil {
                 machine = TriggerMachine(config: loaded)
             } else {
@@ -73,9 +114,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 note("wrote starter config")
             }
         } catch {
-            config = Config.starter()
-            if machine == nil { machine = TriggerMachine(config: config) }
-            note("config error: \(error.localizedDescription)")
+            let detail = Config.describe(error)
+            EventLog.shared.write("config error: \(detail)")
+            // Keep the last config that actually parsed — for the menu and the
+            // machine alike. Falling back to starter() here was doing real
+            // damage: the menu drifted onto a config the machine was not using,
+            // and the next menu click saved that invented config over the user's
+            // file. A typo in the JSON should cost nothing but a warning.
+            if machine == nil {
+                config = Config.starter()
+                machine = TriggerMachine(config: config)
+            }
+            configIsFromDisk = false
+            note("config error: \(detail)")
+        }
+    }
+
+    /// Whether `config` came from a file that parsed. Writing while this is
+    /// false would overwrite a file we could not read.
+    private var configIsFromDisk = false
+
+    /// Persist the config, refusing when the on-disk file is currently broken.
+    @discardableResult
+    private func persistConfig() -> Bool {
+        guard configIsFromDisk else {
+            note("not saving — fix the config error first")
+            return false
+        }
+        do {
+            try config.save()
+            return true
+        } catch {
+            note("could not save config: \(Config.describe(error))")
+            return false
         }
     }
 
@@ -103,6 +174,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tick() {
         if let outcome = machine.checkTimeout() {
             record(outcome)
+        }
+        // A key that could not be lifted is still physically down. Keep trying:
+        // Accessibility can be granted again at any moment, and this is the only
+        // thing that will notice.
+        if let recovered = machine.retryPendingRelease() {
+            record(recovered)
         }
         rebuildMenu()
     }
@@ -193,6 +270,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(warn)
         }
 
+        // The worst state this app can be in, so it says so plainly.
+        if let stuck = machine.pendingRelease {
+            menu.addItem(.separator())
+            menu.addItem(disabledItem("\u{26A0}\u{FE0F} \(stuck.description) may still be held down"))
+            menu.addItem(disabledItem("   retrying every 5s — grant Accessibility to clear it"))
+        }
+
         menu.addItem(.separator())
         if machine.runawayTripped {
             menu.addItem(.separator())
@@ -279,7 +363,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if machine.isRecording { record(machine.abort(reason: "switched dictation app")) }
         config.selectTarget(named: name)
         machine.config = config
-        try? config.save()          // persist, so the choice survives a restart
+        persistConfig()             // persist, so the choice survives a restart
         EventLog.shared.write("dictation app switched to \(name)")
         note("switched to \(name)")
         rebuildMenu()
@@ -306,7 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
         config.showMenuBarIcon = false
-        try? config.save()
+        persistConfig()
         EventLog.shared.write("menu bar icon hidden; set showMenuBarIcon true to restore")
         applyMenuBarVisibility()
     }
@@ -342,9 +426,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 extension AppDelegate: BLEClientDelegate {
     func bleStateChanged(_ state: BLEState) {
         connectionState = state
-        if case .disconnected = state, machine.isRecording {
-            // The take is orphaned; in hold mode a modifier is physically down.
-            record(machine.abort(reason: "device disconnected"))
+        // Only .disconnected was handled here, so switching Bluetooth off
+        // mid-take left the key down until the 300s timeout noticed. The mapping
+        // lives on BLEState so it can be tested without AppKit.
+        if let reason = state.abortReason, machine.isRecording {
+            record(machine.abort(reason: reason))
         }
         rebuildMenu()
     }

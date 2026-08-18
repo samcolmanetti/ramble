@@ -208,7 +208,7 @@ warned). Full UUIDs are `f9c131NN-59d4-11ed-9c9d-0800200c9a66`.
 |---|---|---|
 | `f9c13101` | 10 | `80 1B 60 C3 00 00 00 00 00 80` — static across the run |
 | `f9c13102` | 8 | ASCII **`Instamic`** — device name |
-| `f9c13105` | 1 | single byte, observed `E6` → `E2`. **Battery candidate** |
+| `f9c13105` | 1 | flags byte — oscillates `E6`↔`E2`. **Not battery** (see below) |
 | `f9c13108` | 64 | status block — see below |
 
 ### `f9c13108` is the useful one
@@ -240,13 +240,58 @@ frame in the same session. So the "counter that decrements with recording
 seconds" noted above is the low half of the free-space field — it was storage
 filling up, not a time budget.
 
-### Battery: `f9c13105`
+### Battery: not exposed. `f9c13105` was a false lead.
 
-One byte, decreasing: `E6` (230) → `E2` (226) over roughly 15 seconds that
-included a 7.3 s recording. Too fast to be a percentage, so it is a raw ADC
-reading, a voltage, or a capacity counter in some device unit. **Characterizing
-it needs a long unattended poll**, which is what the battery-drain run is for.
-Until that lands, treat "which byte is battery" as a hypothesis.
+The first two samples of `f9c13105` were `E6` → `E2`, which looked like a
+counter going down. A 10-minute poll shows it **oscillating**, not decreasing:
+
+```
+21:42:32  E6   (first read)
+21:46:32  E2   Δ [0] E6→E2
+21:49:32  E6   Δ [0] E2→E6
+21:50:32  E2   Δ [0] E6→E2
+21:51:32  E6   Δ [0] E2→E6
+```
+
+```
+0xE6 = 1110 0110
+0xE2 = 1110 0010
+              ^ only bit 2 moves
+```
+
+A single toggling bit is a status flag, not a fuel gauge. Reading a downward
+trend from two samples was wrong.
+
+**No battery level is exposed on any readable characteristic.** `f9c13101`
+(10 bytes) stayed byte-identical for the whole run, and `f9c13108` moved only
+in its recording-state bytes. The remaining candidate is `f9c13107` — the one
+that returns GATT error 133 and is presumed to need encryption or an app-level
+handshake. That would neatly explain how the vendor's app shows a battery
+readout while we cannot: it authenticates first.
+
+Getting battery would mean reverse-engineering that handshake, which is a
+project of its own and is **not** on the path to a working trigger.
+
+### Bluetooth Microphone Mode does not record locally
+
+Across a full record cycle in this mode, the free-space counters in `f9c13108`
+did not move at all:
+
+```
+21:43:33  Δ [5] 02→03 [6] 00→01     ← recording started
+21:44:33  Δ [5] 03→02 [6] 01→00     ← recording stopped
+          offsets 32..41 unchanged throughout
+```
+
+In Remote Control Mode the same counter dropped measurably for every take. So
+in Bluetooth Microphone Mode the button is a **pure control signal** — the LED
+turns red and the state flag flips, but nothing is written to the card.
+
+**Consequence for the design:** the "high-quality 32-bit float local backup"
+that the handoff treats as a consolation prize is not available in the mode we
+actually want to run in. You get the microphone and the trigger; you do not
+also get a local safety copy. That is the right trade for dictation, but it
+should be a known one rather than a surprise.
 
 ## Still outstanding
 

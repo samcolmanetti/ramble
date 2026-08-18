@@ -82,3 +82,4 @@ polling FCC1 every 60s (f9c13107 excluded — returns GATT error 133)
 21:51:55.599  op 02  [4F 01 01 01 04 18 02]
 21:51:55.599  op 02  [3A 03 4C]
 21:52:10.568  op 02  [44 02]
+21:52:27.277  op 03  [36]   ■ RECORD STOP   held 31.71s

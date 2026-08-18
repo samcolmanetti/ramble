@@ -85,14 +85,39 @@ final class Sniffer: BLEClientDelegate {
     private var rolledUp = false
     private static let rollupThreshold = 12
 
+    // When scanning began, so a stall can be reported instead of looking like
+    // an idle device with nothing to say.
+    private(set) var scanningSince: Date?
+    private var stallWarningsGiven = 0
+
+    func checkForStall() {
+        guard let since = scanningSince,
+              Date().timeIntervalSince(since) >= 15 else { return }
+        guard stallWarningsGiven < 3 else { return }
+        stallWarningsGiven += 1
+        print("""
+
+        ⚠️  Still scanning after \(Int(Date().timeIntervalSince(since)))s — nothing matched.
+            Most likely causes, in order:
+              1. Another BLE central holds the connection. The Instamic allows
+                 exactly one — quit the Instamic Remote app, and check for a
+                 stray ramble-sniff:  pgrep -fl ramble-sniff
+              2. The mic is asleep. Press its button once to wake it.
+              3. The mic is off, out of range, or charging-only.
+        """)
+    }
+
     func bleStateChanged(_ state: BLEState) {
         sawBluetoothState = true
         switch state {
         case .scanning:
+            scanningSince = Date()
+            stallWarningsGiven = 0
             print("\(stamp())  scanning\(narrow ? " (FF10 filter)" : "")…")
         case .connecting(let n):
             print("\(stamp())  connecting to \(n)…")
         case .connected(let n):
+            scanningSince = nil
             print("\(stamp())  ✓ connected to \(n)")
         case .disconnected(let e):
             print("\(stamp())  ✗ disconnected\(e.map { ": \($0)" } ?? "")")
@@ -306,6 +331,33 @@ if shouldFire {
     }
 }
 
+// The Instamic accepts exactly one BLE central. A second ramble-sniff -- or the
+// Instamic Remote app -- holding the connection makes this process scan forever
+// while the button presses go to the other one. Catch the self-inflicted case up
+// front, since it is by far the most common during development.
+do {
+    let check = Process()
+    check.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+    check.arguments = ["-f", "ramble-sniff"]
+    let pipe = Pipe()
+    check.standardOutput = pipe
+    try? check.run()
+    check.waitUntilExit()
+    let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    let others = output.split(separator: "\n").compactMap { Int32($0) }
+        .filter { $0 != getpid() && $0 != getppid() }
+    if !others.isEmpty {
+        print("""
+
+        ⚠️  Another ramble-sniff is already running (pid \(others.map(String.init).joined(separator: ", "))).
+            The Instamic allows only one BLE central, so this process will scan
+            forever while that one receives the button presses.
+
+            Stop it first:  kill \(others.map(String.init).joined(separator: " "))
+        """)
+    }
+}
+
 let sniffer = Sniffer()
 let client = BLEClient()
 client.delegate = sniffer
@@ -343,6 +395,11 @@ DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
         Then check: System Settings → Privacy & Security → Bluetooth.
     """)
 }
+
+let stallTimer = DispatchSource.makeTimerSource(queue: .main)
+stallTimer.schedule(deadline: .now() + 15, repeating: 15)
+stallTimer.setEventHandler { sniffer.checkForStall() }
+stallTimer.resume()
 
 let sigint = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
 sigint.setEventHandler {

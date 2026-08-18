@@ -156,13 +156,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
+        if machine.runawayTripped {
+            menu.addItem(.separator())
+            menu.addItem(disabledItem("⚠️ Runaway guard tripped — too many starts"))
+            menu.addItem(disabledItem("   check the mic's battery and button"))
+        }
+
         let toggle = NSMenuItem(title: firingEnabled ? "Firing enabled" : "Firing paused",
                                 action: #selector(toggleFiring), keyEquivalent: "")
         toggle.target = self
         toggle.state = firingEnabled ? .on : .off
         menu.addItem(toggle)
 
-        for (title, selector) in [("Edit config…", #selector(openConfig)),
+        for (title, selector) in [("Open event log…", #selector(openLog)),
+                                  ("Edit config…", #selector(openConfig)),
                                   ("Reload config", #selector(reloadConfig)),
                                   ("Reconnect", #selector(reconnect))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
@@ -197,12 +204,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func record(_ outcome: TriggerOutcome) {
         switch outcome {
+        case .ignored(let reason):
+            EventLog.shared.write("  ignored: \(reason)")
+        default:
+            EventLog.shared.write("  \(outcome)")
+        }
+        switch outcome {
         case .fired(let phase, let rule, let action):
             lastFire = ("\(phase.rawValue) \(action) [\(rule)]", Date())
         case .nothingConfigured(let phase, let rule):
             lastFire = ("\(phase.rawValue): nothing configured for \(rule)", Date())
         case .failed(let phase, let reason):
             lastFire = ("\(phase.rawValue) FAILED: \(reason)", Date())
+            // A tripped runaway guard must be visible, not just logged.
+            if machine.runawayTripped { firingEnabled = false }
         case .ignored:
             break
         }
@@ -212,6 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func toggleFiring() {
         firingEnabled.toggle()
+        if firingEnabled { machine.reset() }   // clears a tripped runaway guard
         if !firingEnabled, machine.isRecording {
             record(machine.abort(reason: "firing paused"))
         }
@@ -220,6 +236,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openConfig() {
         NSWorkspace.shared.open(Config.path)
+    }
+
+    @objc private func openLog() {
+        NSWorkspace.shared.open(EventLog.path)
     }
 
     @objc private func reloadConfig() {
@@ -254,6 +274,11 @@ extension AppDelegate: BLEClientDelegate {
 
     func bleDidReceive(frame: Frame, event: RecordEvent, raw: [UInt8]) {
         lastEvent = (event.label, Date())
+        // Every frame is logged, whether or not it triggers anything. A
+        // spurious keystroke and a spurious frame from the device look
+        // identical from the outside; only the raw stream separates them.
+        EventLog.shared.write(String(format: "frame  op %02X [%@]  %@",
+                                     frame.opcode, frame.payload.hex, event.label))
         guard firingEnabled else {
             rebuildMenu()
             return
@@ -264,5 +289,6 @@ extension AppDelegate: BLEClientDelegate {
 
     func bleLog(_ message: String) {
         NSLog("[ramble] %@", message)
+        EventLog.shared.write(message)
     }
 }

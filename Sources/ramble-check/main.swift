@@ -428,6 +428,43 @@ do {
     expect(m.checkTimeout() == nil, "timeout does not fire twice")
 }
 
+group("runaway guard pauses firing instead of machine-gunning hotkeys")
+do {
+    let config = Config(mode: .hold,
+                        defaultRule: Rule(name: "wispr", bundleIDs: [],
+                                          onStart: Action(key: "fn"),
+                                          onStop: Action(key: "fn")))
+    let keys = FakeKeystroke()
+    let m = TriggerMachine(config: config, frontmostBundleID: { nil },
+                           runShell: { _ in }, keystroke: keys)
+    m.runawayLimit = 3
+    m.duplicateWindow = 0
+    for _ in 0 ..< 3 {
+        _ = m.handle(START)
+        _ = m.handle(STOP_STATE)
+    }
+    expectEqual(keys.pressed.count, 3, "normal starts fire up to the limit")
+    expect(!m.runawayTripped, "guard not tripped at the limit")
+
+    let tripped = m.handle(START)
+    expect(m.runawayTripped, "exceeding the limit trips the guard")
+    if case .failed(_, let reason) = tripped {
+        expect(reason.contains("firing paused"), "reports why: \(reason)")
+    } else {
+        expect(false, "should report a failure, got \(tripped)")
+    }
+    expectEqual(keys.pressed.count, 3, "no further keystrokes are sent")
+    expect(!m.isRecording, "and nothing is left held")
+
+    _ = m.handle(START)
+    expectEqual(keys.pressed.count, 3, "still suppressed while tripped")
+
+    m.reset()
+    expect(!m.runawayTripped, "reset clears the guard")
+    _ = m.handle(START)
+    expectEqual(keys.pressed.count, 4, "firing resumes after reset")
+}
+
 group("config round-trips through JSON")
 do {
     let original = Config.starter()

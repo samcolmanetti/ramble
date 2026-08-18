@@ -70,6 +70,16 @@ public final class TriggerMachine {
     /// take was running, i.e. our state is stale.
     public var duplicateWindow: TimeInterval = 0.5
 
+    /// Starts seen recently, for the runaway guard.
+    private var recentStarts: [Date] = []
+    /// More starts than this within `runawayWindow` means something is wrong —
+    /// a device malfunctioning as its battery dies, or a frame storm. Firing
+    /// pauses rather than machine-gunning hotkeys into whatever is focused.
+    public var runawayLimit = 12
+    public var runawayWindow: TimeInterval = 60
+    /// Set when the guard trips. Clear it by re-enabling firing.
+    public private(set) var runawayTripped = false
+
     /// A take is abandoned after this long. Guards against a stop frame that
     /// never arrives — without it, a missed stop in hold mode leaves a modifier
     /// pressed indefinitely.
@@ -123,12 +133,30 @@ public final class TriggerMachine {
         _ = recording
     }
 
-    public func reset() { abort(reason: "reset") }
+    public func reset() {
+        abort(reason: "reset")
+        recentStarts.removeAll()
+        runawayTripped = false
+    }
 
     @discardableResult
     public func handle(_ event: RecordEvent) -> TriggerOutcome {
         switch event {
         case .recordStarted:
+            let now = Date()
+            recentStarts.append(now)
+            recentStarts.removeAll { now.timeIntervalSince($0) > runawayWindow }
+            if recentStarts.count > runawayLimit {
+                runawayTripped = true
+                abort(reason: "runaway guard")
+                return .failed(phase: .start,
+                               reason: "\(recentStarts.count) starts in "
+                                     + "\(Int(runawayWindow))s — firing paused. "
+                                     + "Check the mic's battery and button.")
+            }
+            if runawayTripped {
+                return .ignored(reason: "firing paused by the runaway guard")
+            }
             if case .recording(_, _, let since) = state {
                 let age = Date().timeIntervalSince(since)
                 guard age > duplicateWindow else {

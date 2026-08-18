@@ -175,6 +175,8 @@ final class Sniffer: BLEClientDelegate {
 
     func bleDidReceive(frame: Frame, event: RecordEvent, raw: [UInt8]) {
         frameCount += 1
+        EventLog.shared.write(String(format: "frame  op %02X [%@]  %@",
+                                     frame.opcode, frame.payload.hex, event.label))
 
         var entry = window[frame.opcode] ?? (0, 0)
         entry.count += 1

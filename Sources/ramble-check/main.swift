@@ -471,8 +471,9 @@ do {
     let data = try! JSONEncoder().encode(original)
     let decoded = try! JSONDecoder().decode(Config.self, from: data)
     expectEqual(decoded, original, "starter config survives encode/decode")
-    expectEqual(decoded.rule(for: "com.mitchellh.ghostty").onStart?.summary, "⇧SPACE",
-                "starter config maps the terminal to ⇧Space, matching keybindings.json")
+    expectEqual(decoded.rule(for: "com.mitchellh.ghostty").onStart?.summary, "SPACE",
+                "starter config sends a bare Space to terminals — modifiers are"
+                    + " unreliable through a terminal")
     expectEqual(decoded.rule(for: "com.apple.Safari").onStart?.summary, "🌐fn",
                 "starter default is Wispr Flow's Fn push-to-talk")
     expectEqual(decoded.rule(for: "com.apple.Safari").mode, .hold,

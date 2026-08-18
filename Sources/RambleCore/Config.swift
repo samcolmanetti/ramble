@@ -113,13 +113,19 @@ public struct Config: Codable, Equatable {
                 mode: .hold
             ),
             rules: [
-                // Matches ~/.claude/keybindings.json, which rebinds
-                // voice:pushToTalk off bare Space. Keep the two in sync — if the
-                // keybinding moves, this must move with it.
-                Rule(name: "Claude Code voice (⇧Space)",
+                // Claude Code's voice:pushToTalk default, in tap mode: one tap
+                // starts, the next sends.
+                //
+                // Deliberately a *bare* space. Terminals send 0x20 for both
+                // Space and Shift+Space unless the Kitty keyboard protocol's
+                // disambiguation mode is active, which it is not in every
+                // state — a Shift+Space binding here fired only intermittently.
+                // Modifiers are unreliable through a terminal generally: Ghostty
+                // was observed stripping Cmd entirely on the way to the TUI.
+                Rule(name: "Claude Code voice (tap Space)",
                      bundleIDs: ["com.mitchellh.ghostty", "com.googlecode.iterm2"],
-                     onStart: Action(key: "space", mods: ["shift"]),
-                     onStop: Action(key: "space", mods: ["shift"]),
+                     onStart: Action(key: "space"),
+                     onStop: Action(key: "space"),
                      mode: .toggle),
                 Rule(name: "Codex voice — set the key you use",
                      bundleIDs: ["com.openai.codex"],

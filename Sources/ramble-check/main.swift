@@ -509,6 +509,28 @@ do {
     expectEqual(config.activeRule.name, "Off", "an unknown target name is ignored")
 }
 
+group("menu bar icon can be hidden, and defaults to visible")
+do {
+    let fresh = Config.starter()
+    expect(fresh.showMenuBarIcon, "starter config shows the icon")
+
+    // Absent from an older config file: must default to visible, or upgrading
+    // would silently hide the only UI.
+    let legacy = try! JSONDecoder().decode(
+        Config.self, from: Data("{\"mode\":\"toggle\"}".utf8))
+    expect(legacy.showMenuBarIcon, "a config with no showMenuBarIcon key shows the icon")
+
+    let hidden = try! JSONDecoder().decode(
+        Config.self, from: Data("{\"showMenuBarIcon\":false}".utf8))
+    expect(!hidden.showMenuBarIcon, "explicit false hides it")
+
+    var round = Config.starter()
+    round.showMenuBarIcon = false
+    let reloaded = try! JSONDecoder().decode(Config.self,
+                                             from: try! JSONEncoder().encode(round))
+    expect(!reloaded.showMenuBarIcon, "the setting survives a save/load cycle")
+}
+
 group("configs written before targets existed still load")
 do {
     // defaultRule was the old shape. Dropping support would break anyone who

@@ -80,6 +80,10 @@ public enum TriggerMode: String, Codable {
 public struct Config: Codable, Equatable {
     public var mode: TriggerMode
     public var autoReconnect: Bool
+    /// Show the status item. Ramble keeps working when this is false — the icon
+    /// is a window onto it, not the thing itself. Set it back to true here (the
+    /// file is watched) to bring the icon back.
+    public var showMenuBarIcon: Bool
     /// Named dictation services, switchable from the menu bar. Whichever one is
     /// active handles any app without a specific rule.
     public var targets: [Rule]
@@ -93,12 +97,14 @@ public struct Config: Codable, Equatable {
 
     public init(mode: TriggerMode = .toggle,
                 autoReconnect: Bool = true,
+                showMenuBarIcon: Bool = true,
                 targets: [Rule] = [],
                 activeTarget: String? = nil,
                 rules: [Rule] = [],
                 defaultRule: Rule? = nil) {
         self.mode = mode
         self.autoReconnect = autoReconnect
+        self.showMenuBarIcon = showMenuBarIcon
         self.targets = targets
         self.activeTarget = activeTarget
         self.rules = rules
@@ -109,6 +115,7 @@ public struct Config: Codable, Equatable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         mode = try c.decodeIfPresent(TriggerMode.self, forKey: .mode) ?? .toggle
         autoReconnect = try c.decodeIfPresent(Bool.self, forKey: .autoReconnect) ?? true
+        showMenuBarIcon = try c.decodeIfPresent(Bool.self, forKey: .showMenuBarIcon) ?? true
         targets = try c.decodeIfPresent([Rule].self, forKey: .targets) ?? []
         activeTarget = try c.decodeIfPresent(String.self, forKey: .activeTarget)
         rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []

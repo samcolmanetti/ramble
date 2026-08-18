@@ -2,7 +2,7 @@ import AppKit
 import RambleCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var statusItem: NSStatusItem!
+    private var statusItem: NSStatusItem?
     private var client: BLEClient!
     private var machine: TriggerMachine!
     private var config: Config!
@@ -15,9 +15,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var configWatcher: DispatchSourceFileSystemObject?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        statusItem.menu = NSMenu()
-
         loadConfig(announce: false)
 
         client = BLEClient()
@@ -33,8 +30,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.tick()
         }
 
-        rebuildMenu()
+        applyMenuBarVisibility()
         watchConfigFile()
+    }
+
+    /// Create or tear down the status item to match the config.
+    ///
+    /// The icon is a window onto Ramble, not Ramble itself — the BLE client and
+    /// the trigger machine run identically either way.
+    private func applyMenuBarVisibility() {
+        if config.showMenuBarIcon {
+            if statusItem == nil {
+                statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+            }
+            rebuildMenu()
+        } else if let item = statusItem {
+            NSStatusBar.system.removeStatusItem(item)
+            statusItem = nil
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -77,7 +90,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         source.setEventHandler { [weak self] in
             guard let self else { return }
             self.loadConfig(announce: true)
-            self.rebuildMenu()
+            self.applyMenuBarVisibility()
             // Editors replace rather than write in place, so the descriptor has
             // to be re-established after each change.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { self.watchConfigFile() }
@@ -117,6 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func rebuildMenu() {
+        guard let statusItem else { return }
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Ramble")
             button.image?.isTemplate = true
@@ -195,7 +209,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for (title, selector) in [("Open event log…", #selector(openLog)),
                                   ("Edit config…", #selector(openConfig)),
                                   ("Reload config", #selector(reloadConfig)),
-                                  ("Reconnect", #selector(reconnect))] {
+                                  ("Reconnect", #selector(reconnect)),
+                                  ("Hide menu bar icon…", #selector(hideMenuBarIcon))] {
             let item = NSMenuItem(title: title, action: selector, keyEquivalent: "")
             item.target = self
             menu.addItem(item)
@@ -268,6 +283,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         EventLog.shared.write("dictation app switched to \(name)")
         note("switched to \(name)")
         rebuildMenu()
+    }
+
+    @objc private func hideMenuBarIcon() {
+        // Hiding the only visible affordance is a one-way door unless the way
+        // back is spelled out first — and it has to be spelled out *before* the
+        // icon disappears, not after.
+        let alert = NSAlert()
+        alert.messageText = "Hide the Ramble icon?"
+        alert.informativeText = """
+        Ramble keeps running and the mic button keeps working.
+
+        To bring the icon back, set "showMenuBarIcon": true in
+        \(Config.path.path)
+
+        The file is watched, so the icon reappears as soon as you save.
+        """
+        alert.addButton(withTitle: "Hide")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .informational
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        config.showMenuBarIcon = false
+        try? config.save()
+        EventLog.shared.write("menu bar icon hidden; set showMenuBarIcon true to restore")
+        applyMenuBarVisibility()
     }
 
     @objc private func openConfig() {

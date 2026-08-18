@@ -22,7 +22,7 @@ Requires the Swift toolchain. **Xcode is not needed** — Command Line Tools are
 enough (`xcode-select --install`).
 
 ```sh
-swift run ramble-check       # test suite — 132 checks, no hardware needed
+swift run ramble-check       # test suite — 136 checks, no hardware needed
 Scripts/bundle.sh            # assemble build/Ramble.app
 open build/Ramble.app
 ```
@@ -101,6 +101,11 @@ Other behavior worth knowing:
   and how you mute an app like a password manager.
 - **`{"shell": "..."}`** works instead of a key, for anything driven by a URL
   scheme or CLI.
+- **`"showMenuBarIcon": false`** hides the status item. Ramble keeps running and
+  the button keeps working — the icon is a window onto it, not the thing itself.
+  Set it back to `true` and the icon reappears on save, since the file is
+  watched. The menu's *Hide menu bar icon…* item says this before hiding, so
+  it's never a one-way door.
 - **Avoid modifiers on terminal targets.** Terminals send the same byte for
   Space and Shift+Space unless the Kitty keyboard protocol's disambiguation mode
   happens to be active, and Ghostty was observed dropping Cmd entirely on the

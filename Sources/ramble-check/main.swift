@@ -258,6 +258,51 @@ do {
     expectEqual(keys.taps, ["SPACE", "SPACE"], "both keystrokes went to the terminal chord")
 }
 
+group("Fn/Globe as a key, for Wispr Flow push-to-talk")
+expectEqual(Keys.code(for: "fn"), 63, "fn maps to kVK_Function (63)")
+expectEqual(Keys.code(for: "globe"), 63, "globe is an alias for fn")
+switch KeyChord.parse(key: "fn", mods: []) {
+case .success(let c):
+    expectEqual(c.keyCode, 63, "chord carries keycode 63")
+    expect(c.flags.contains(.maskSecondaryFn),
+           "fn sets maskSecondaryFn — listeners watch the flag, not just the keycode")
+    expectEqual(c.description, "🌐fn", "fn renders legibly")
+case .failure(let e):
+    expect(false, "fn should parse: \(e)")
+}
+
+group("per-rule mode overrides the global mode")
+do {
+    // Wispr Flow needs a held Fn; Claude Code needs a discrete tap. One global
+    // mode cannot serve both, so the rule must be able to override it.
+    let config = Config(
+        mode: .toggle,
+        defaultRule: Rule(name: "wispr", bundleIDs: [],
+                          onStart: Action(key: "fn"), onStop: Action(key: "fn"),
+                          mode: .hold),
+        rules: [Rule(name: "claude", bundleIDs: ["com.mitchellh.ghostty"],
+                     onStart: Action(key: "space", mods: ["shift"]),
+                     onStop: Action(key: "space", mods: ["shift"]),
+                     mode: .toggle)]
+    )
+    let wisprKeys = FakeKeystroke()
+    let w = TriggerMachine(config: config, frontmostBundleID: { "com.other.app" },
+                           runShell: { _ in }, keystroke: wisprKeys)
+    _ = w.handle(START)
+    _ = w.handle(STOP_PRESS)
+    expectEqual(wisprKeys.pressed, ["🌐fn"], "default rule holds Fn down on start")
+    expectEqual(wisprKeys.released, ["🌐fn"], "default rule releases Fn on stop")
+    expectEqual(wisprKeys.taps, [], "default rule never taps despite global mode being toggle")
+
+    let claudeKeys = FakeKeystroke()
+    let c = TriggerMachine(config: config, frontmostBundleID: { "com.mitchellh.ghostty" },
+                           runShell: { _ in }, keystroke: claudeKeys)
+    _ = c.handle(START)
+    _ = c.handle(STOP_PRESS)
+    expectEqual(claudeKeys.taps, ["⇧SPACE", "⇧SPACE"], "terminal rule taps twice")
+    expectEqual(claudeKeys.pressed, [], "terminal rule never holds")
+}
+
 group("push-to-talk mode holds the key across the take")
 do {
     let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty", mode: .hold)
@@ -312,6 +357,10 @@ do {
     expectEqual(decoded, original, "starter config survives encode/decode")
     expectEqual(decoded.rule(for: "com.mitchellh.ghostty").onStart?.summary, "⇧SPACE",
                 "starter config maps the terminal to ⇧Space, matching keybindings.json")
+    expectEqual(decoded.rule(for: "com.apple.Safari").onStart?.summary, "🌐fn",
+                "starter default is Wispr Flow's Fn push-to-talk")
+    expectEqual(decoded.rule(for: "com.apple.Safari").mode, .hold,
+                "the Wispr Flow rule holds rather than taps")
 }
 
 print("""

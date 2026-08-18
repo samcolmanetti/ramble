@@ -128,7 +128,7 @@ public final class TriggerMachine {
             return .failed(phase: phase, reason: error.description)
         case .success(let chord):
             do {
-                switch (config.mode, phase) {
+                switch (rule.mode ?? config.mode, phase) {
                 case (.hold, .start): try keystroke.press(chord)
                 case (.hold, .stop): try keystroke.release(chord)
                 default: try keystroke.tap(chord)

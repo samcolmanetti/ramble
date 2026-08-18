@@ -36,13 +36,20 @@ public struct Rule: Codable, Equatable {
     public var bundleIDs: [String]
     public var onStart: Action?
     public var onStop: Action?
+    /// Overrides the global mode for this rule. Necessary because different
+    /// targets want opposite semantics: Wispr Flow's push-to-talk is a held Fn,
+    /// while Claude Code's voice key is a discrete tap. A single global mode
+    /// cannot serve both.
+    public var mode: TriggerMode?
 
     public init(name: String? = nil, bundleIDs: [String],
-                onStart: Action? = nil, onStop: Action? = nil) {
+                onStart: Action? = nil, onStop: Action? = nil,
+                mode: TriggerMode? = nil) {
         self.name = name
         self.bundleIDs = bundleIDs
         self.onStart = onStart
         self.onStop = onStop
+        self.mode = mode
     }
 
     public func matches(bundleID: String?) -> Bool {
@@ -94,11 +101,16 @@ public struct Config: Codable, Equatable {
         Config(
             mode: .toggle,
             autoReconnect: true,
+            // Wispr Flow's push-to-talk is a bare Fn/Globe hold — read out of
+            // its own config.json, where prefs.user.shortcuts maps "63" to
+            // "ptt" and 63 is kVK_Function. Hold mode presses Fn on the button
+            // press and releases it on the next one.
             defaultRule: Rule(
-                name: "Wispr Flow (default)",
+                name: "Wispr Flow (push-to-talk)",
                 bundleIDs: [],
-                onStart: Action(key: "d", mods: ["ctrl", "opt", "cmd"]),
-                onStop: Action(key: "d", mods: ["ctrl", "opt", "cmd"])
+                onStart: Action(key: "fn"),
+                onStop: Action(key: "fn"),
+                mode: .hold
             ),
             rules: [
                 // Matches ~/.claude/keybindings.json, which rebinds
@@ -107,7 +119,8 @@ public struct Config: Codable, Equatable {
                 Rule(name: "Claude Code voice (⇧Space)",
                      bundleIDs: ["com.mitchellh.ghostty", "com.googlecode.iterm2"],
                      onStart: Action(key: "space", mods: ["shift"]),
-                     onStop: Action(key: "space", mods: ["shift"])),
+                     onStop: Action(key: "space", mods: ["shift"]),
+                     mode: .toggle),
                 Rule(name: "Codex voice — set the key you use",
                      bundleIDs: ["com.openai.codex"],
                      onStart: nil, onStop: nil),

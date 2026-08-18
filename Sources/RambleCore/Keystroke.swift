@@ -23,6 +23,10 @@ public struct KeyChord: Equatable {
             return .failure(.unknownKey(key))
         }
         var flags: CGEventFlags = []
+        // Fn is both a key and a modifier bit. Anything listening for it watches
+        // the flag, so posting keycode 63 without also setting the flag would be
+        // invisible to every listener that matters.
+        if code == 63 { flags.insert(.maskSecondaryFn) }
         for mod in mods {
             switch mod.lowercased() {
             case "cmd", "command", "⌘": flags.insert(.maskCommand)
@@ -38,8 +42,9 @@ public struct KeyChord: Equatable {
         if flags.contains(.maskAlternate) { parts.append("⌥") }
         if flags.contains(.maskShift) { parts.append("⇧") }
         if flags.contains(.maskCommand) { parts.append("⌘") }
+        let label = code == 63 ? "🌐fn" : key.uppercased()
         return .success(KeyChord(keyCode: code, flags: flags,
-                                 description: parts.joined() + key.uppercased()))
+                                 description: parts.joined() + label))
     }
 }
 
@@ -75,6 +80,9 @@ public enum Keys {
         "f13": 105, "f14": 107, "f15": 113, "f16": 106, "f17": 64, "f18": 79,
         "f19": 80, "f20": 90,
         "left": 123, "right": 124, "down": 125, "up": 126,
+        // The Globe/Fn key. Usable as a key in its own right, not just a
+        // modifier — Wispr Flow's push-to-talk is a bare Fn hold.
+        "fn": 63, "globe": 63, "function": 63,
         "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
     ]
 

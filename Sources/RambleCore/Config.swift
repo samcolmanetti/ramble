@@ -139,6 +139,11 @@ public struct Config: Codable, Equatable {
     public var defaultRule: Rule?
     /// Microphone routing. Off unless asked for, since it changes system state.
     public var audio: AudioSettings
+    /// Abandon a held-key take after this long. Tighter than the toggle cap
+    /// because an overrunning hold leaves a modifier down across every app.
+    public var maxHoldSeconds: Double
+    /// Abandon a tap-mode take after this long.
+    public var maxToggleSeconds: Double
 
     public init(mode: TriggerMode = .toggle,
                 autoReconnect: Bool = true,
@@ -147,7 +152,9 @@ public struct Config: Codable, Equatable {
                 activeTarget: String? = nil,
                 rules: [Rule] = [],
                 defaultRule: Rule? = nil,
-                audio: AudioSettings = AudioSettings()) {
+                audio: AudioSettings = AudioSettings(),
+                maxHoldSeconds: Double = 90,
+                maxToggleSeconds: Double = 300) {
         self.mode = mode
         self.autoReconnect = autoReconnect
         self.showMenuBarIcon = showMenuBarIcon
@@ -156,6 +163,8 @@ public struct Config: Codable, Equatable {
         self.rules = rules
         self.defaultRule = defaultRule
         self.audio = audio
+        self.maxHoldSeconds = maxHoldSeconds
+        self.maxToggleSeconds = maxToggleSeconds
     }
 
     /// Spelled out rather than synthesized so `save()` can tell a key this
@@ -163,6 +172,7 @@ public struct Config: Codable, Equatable {
     /// optional is nil.
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case mode, autoReconnect, showMenuBarIcon, targets, activeTarget, rules, defaultRule, audio
+        case maxHoldSeconds, maxToggleSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -175,6 +185,8 @@ public struct Config: Codable, Equatable {
         rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
         defaultRule = try c.decodeIfPresent(Rule.self, forKey: .defaultRule)
         audio = try c.decodeIfPresent(AudioSettings.self, forKey: .audio) ?? AudioSettings()
+        maxHoldSeconds = try c.decodeIfPresent(Double.self, forKey: .maxHoldSeconds) ?? 90
+        maxToggleSeconds = try c.decodeIfPresent(Double.self, forKey: .maxToggleSeconds) ?? 300
     }
 
     /// The target currently handling apps without a specific rule.

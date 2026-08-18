@@ -93,6 +93,38 @@ Every early test take was under 15 seconds, so the timer never showed.
 Trigger on it and every dictation truncates at exactly 15 seconds.
 **Use `03 [36]`.**
 
+## `0x09` announces a state change the device made itself
+
+`03 [35]` is a **state**, not an event. The device reports "I am now recording"
+whether a thumb pressed the button or the device decided on its own — and it
+decides on its own, because it is also an HFP headset. When the audio link
+becomes active the mic enters its recording state, goes red, and reports it.
+Nothing downstream can recover the difference: the frames are byte-identical.
+
+`0x09` is the tell. Its 9-byte payload is fixed — `49 C0 8F E9 C0 38 9F 01 02`
+in all 16 observations across several hours and many reconnects — so it carries
+no data. It is a marker, and it appears in exactly two situations:
+
+| When `0x09` appears | Observed | A `03 [35]` follows? |
+|---|---|---|
+| ~0.15 s after subscribing to FF11 | 10× | never |
+| Spontaneously, mid-session | 6× | **always**, 238–270 ms later |
+
+Twenty-two genuine button presses recorded alongside these had **no frame at all
+in the preceding 1.5 seconds**. So:
+
+- `0x09` right after subscribe — the connection handshake, harmless
+- `0x09` out of nowhere — the device is about to change its own state, and the
+  `03 [35]` that follows a quarter of a second later is that announcement, not a
+  press
+
+Ramble ignores a start inside 400 ms of a spontaneous `0x09`. Without it, every
+activation of the audio link types into whatever is frontmost — and in hold mode
+holds a key down until something notices.
+
+The tight clustering is what makes this trustworthy: 238, 239, 240, 268, 270 ms.
+That is a state machine, not a person.
+
 ## Why this beats audio-level detection
 
 Both approaches work. They fail differently, and the failure modes are what

@@ -76,6 +76,23 @@ public final class TriggerMachine {
     /// take was running, i.e. our state is stale.
     public var duplicateWindow: TimeInterval = 0.5
 
+    /// When the device last announced its own state (opcode 0x09).
+    ///
+    /// The Instamic is an HFP headset as well as a BLE peripheral. When the
+    /// audio link comes up, the device enters its recording state on its own —
+    /// LED red — and reports that over BLE as an ordinary `03 [35]`, which is
+    /// indistinguishable from a thumb on the button. Measured twice, the device
+    /// emits `0x09` and then the start 240 ms and 238 ms later. Every one of the
+    /// 22 genuine presses recorded alongside them had no frame at all in the
+    /// preceding 1.5 s, so the announcement is the tell.
+    private var lastStateAnnouncement: Date?
+    /// A start this soon after `0x09` is the device syncing its state, not a
+    /// press. Generous enough to cover the observed ~240 ms, far short of the
+    /// gap before any real press seen so far.
+    public var stateAnnouncementWindow: TimeInterval = 0.4
+    /// Set when a start is suppressed as a device announcement.
+    public private(set) var suppressedAnnouncements = 0
+
     /// Starts seen recently, for the runaway guard.
     private var recentStarts: [Date] = []
     /// More starts than this within `runawayWindow` means something is wrong —
@@ -89,7 +106,21 @@ public final class TriggerMachine {
     /// A take is abandoned after this long. Guards against a stop frame that
     /// never arrives — without it, a missed stop in hold mode leaves a modifier
     /// pressed indefinitely.
-    public var maxTakeDuration: TimeInterval = 300
+    ///
+    /// Hold is capped far tighter than toggle because the two fail differently.
+    /// A toggle take that overruns leaves a dictation app listening; a hold take
+    /// that overruns leaves a modifier physically down across every app on the
+    /// machine. A spurious hold ran 122 seconds under the old single 300 s cap
+    /// before anything noticed, which is 122 seconds of live microphone and a
+    /// held Fn nobody asked for.
+    public var maxHoldDuration: TimeInterval = 90
+    public var maxToggleDuration: TimeInterval = 300
+
+    /// The cap that applies to the take in flight, chosen by its latched mode.
+    var currentTakeLimit: TimeInterval {
+        guard case .recording(_, let mode, _, _) = state else { return maxToggleDuration }
+        return mode == .hold ? maxHoldDuration : maxToggleDuration
+    }
 
     /// How long the current take has been running, if any.
     public var takeDuration: TimeInterval? {
@@ -176,11 +207,11 @@ public final class TriggerMachine {
         }
     }
 
-    /// Abort if the current take has outlived `maxTakeDuration`. Drive this from
+    /// Abort if the current take has outlived its mode's cap. Drive this from
     /// a timer.
     @discardableResult
     public func checkTimeout() -> TriggerOutcome? {
-        guard let duration = takeDuration, duration > maxTakeDuration else { return nil }
+        guard let duration = takeDuration, duration > currentTakeLimit else { return nil }
         return abort(reason: String(format: "no stop after %.0fs", duration))
     }
 
@@ -195,6 +226,18 @@ public final class TriggerMachine {
         switch event {
         case .recordStarted:
             let now = Date()
+            // The device announced its state a moment ago, so this is that
+            // announcement arriving — the audio link coming up put the mic in
+            // its recording state, nobody touched the button. Firing here types
+            // into whatever is frontmost and, in hold mode, holds a key down.
+            if let announced = lastStateAnnouncement,
+               now.timeIntervalSince(announced) < stateAnnouncementWindow {
+                lastStateAnnouncement = nil
+                suppressedAnnouncements += 1
+                return .ignored(reason: String(
+                    format: "device state announcement, not a press (%.0fms after 0x09)",
+                    now.timeIntervalSince(announced) * 1000))
+            }
             if runawayTripped {
                 return .ignored(reason: "firing paused by the runaway guard")
             }
@@ -247,7 +290,10 @@ public final class TriggerMachine {
             return .ignored(reason: "start press (0x35 follows)")
         case .unknownRecordState(let b):
             return .ignored(reason: String(format: "unknown record state 0x%02X", b))
-        case .other:
+        case .other(let opcode, _):
+            // 0x09 is the device announcing its own state. Remember when, so a
+            // start that follows immediately can be told apart from a press.
+            if opcode == 0x09 { lastStateAnnouncement = Date() }
             return .ignored(reason: "not a trigger")
         }
     }

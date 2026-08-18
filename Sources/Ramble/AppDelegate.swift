@@ -108,6 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 machine.config = loaded
             }
+            machine.maxHoldDuration = loaded.maxHoldSeconds
+            machine.maxToggleDuration = loaded.maxToggleSeconds
             if announce {
                 note("config reloaded — \(loaded.rules.count) app rules")
             } else if created {

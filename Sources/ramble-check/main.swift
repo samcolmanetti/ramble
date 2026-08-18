@@ -550,7 +550,8 @@ do {
     let keys = FakeKeystroke()
     let m = TriggerMachine(config: config, frontmostBundleID: { nil },
                            runShell: { _ in }, keystroke: keys)
-    m.maxTakeDuration = 0.2
+    m.maxHoldDuration = 0.2
+    m.maxToggleDuration = 0.2
     _ = m.handle(START)
     expect(m.checkTimeout() == nil, "no timeout before the deadline")
     Thread.sleep(forTimeInterval: 0.3)
@@ -602,6 +603,109 @@ do {
 // hardware duplicates `duplicateWindow` exists to absorb. One physical press
 // costing two of twelve slots halves the real budget to about six takes a
 // minute, which ordinary rapid dictation reaches.
+// The Instamic is an HFP headset as well as a BLE peripheral. When the audio
+// link comes up it enters its recording state unprompted, goes red, and reports
+// that as an ordinary 03 [35]. Measured on hardware: opcode 0x09, then the start
+// 240 ms and 238 ms later, while all 22 genuine presses alongside them had no
+// frame at all in the preceding 1.5 s.
+let STATE_ANNOUNCE = frame(0x09, [0x49, 0xC0, 0x8F, 0xE9, 0xC0, 0x38, 0x9F, 0x01, 0x02])
+
+group("a runaway hold is cut short sooner than a runaway toggle")
+do {
+    let c = Config.starter()
+    expectEqual(c.maxHoldSeconds, 90, "a held key is abandoned after 90s by default")
+    expectEqual(c.maxToggleSeconds, 300, "a tap-mode take gets the old 300s")
+    let round = try! JSONDecoder().decode(Config.self, from: JSONEncoder().encode(c))
+    expectEqual(round.maxHoldSeconds, 90, "the caps survive a round trip")
+    let legacy = try! JSONDecoder().decode(Config.self, from: Data("{}".utf8))
+    expectEqual(legacy.maxHoldSeconds, 90, "a config without them still gets the safe default")
+}
+do {
+    // The hold cap must apply to a hold take, not the toggle one.
+    let keys = FakeKeystroke()
+    let config = Config(mode: .hold,
+                        targets: [Rule(name: "ptt", bundleIDs: [], onStart: Action(key: "fn"))],
+                        activeTarget: "ptt", rules: [])
+    let m = TriggerMachine(config: config, frontmostBundleID: { nil },
+                           runShell: { _ in }, keystroke: keys)
+    m.maxHoldDuration = 0.15
+    m.maxToggleDuration = 999          // must not be the one consulted
+    _ = m.handle(START)
+    expectEqual(keys.pressed, ["🌐fn"], "the hold take pressed")
+    expect(m.checkTimeout() == nil, "not yet over its limit")
+    Thread.sleep(forTimeInterval: 0.2)
+    let out = m.checkTimeout()
+    expect(out != nil, "the hold take is abandoned at its own, tighter cap")
+    expectEqual(keys.released, ["🌐fn"], "and the held key comes back up")
+    expect(!m.isRecording, "the take is over")
+}
+do {
+    // A toggle take holds nothing, so it keeps the longer rope.
+    let (m, _, _) = machine(frontmost: "com.mitchellh.ghostty")
+    m.maxHoldDuration = 0.05
+    m.maxToggleDuration = 999
+    _ = m.handle(START)
+    Thread.sleep(forTimeInterval: 0.1)
+    expect(m.checkTimeout() == nil, "a toggle take is not cut short by the hold cap")
+}
+
+group("a start that follows the device announcing itself is not a press")
+do {
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    _ = m.handle(STATE_ANNOUNCE)
+    let out = m.handle(START)          // 240ms in the field; immediate here
+    expectEqual(keys.taps, [], "no keystroke is sent for a device state announcement")
+    expect(!m.isRecording, "and no take is started")
+    expectEqual(m.suppressedAnnouncements, 1, "the suppression is counted")
+    var ignored = false
+    if case .ignored(let why) = out { ignored = why.contains("not a press") }
+    expect(ignored, "and it says why: \(out)")
+}
+do {
+    // The matching stop must not fire either — there is no take to end.
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    _ = m.handle(STATE_ANNOUNCE)
+    _ = m.handle(START)
+    let out = m.handle(STOP_STATE)
+    expectEqual(keys.taps, [], "the stop that follows is silent too")
+    var ignored = false
+    if case .ignored = out { ignored = true }
+    expect(ignored, "a stop with no take is ignored, as always")
+}
+do {
+    // A real press well after an announcement still works. This is the risk the
+    // window has to avoid: swallowing genuine presses.
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    m.stateAnnouncementWindow = 0.05
+    _ = m.handle(STATE_ANNOUNCE)
+    Thread.sleep(forTimeInterval: 0.08)
+    _ = m.handle(START)
+    expectEqual(keys.taps, ["SPACE"], "a press outside the window fires normally")
+    expect(m.isRecording, "and starts a take")
+    expectEqual(m.suppressedAnnouncements, 0, "nothing was suppressed")
+}
+do {
+    // The overwhelmingly common case: a press with no announcement before it.
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    _ = m.handle(START)
+    expectEqual(keys.taps, ["SPACE"], "an unannounced start is a real press")
+}
+do {
+    // Only 0x09 is an announcement. Other traffic must not gate the button.
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    _ = m.handle(frame(0x04, [0x44, 0xFF]))
+    _ = m.handle(START)
+    expectEqual(keys.taps, ["SPACE"], "unrelated traffic does not suppress a press")
+}
+do {
+    // An announcement that is not followed by a start must not arm indefinitely.
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")
+    _ = m.handle(STATE_ANNOUNCE)
+    _ = m.handle(START)                 // suppressed, and disarms
+    _ = m.handle(START)                 // the user really does press it now
+    expectEqual(keys.taps, ["SPACE"], "the guard disarms after one suppression")
+}
+
 group("the runaway guard counts presses, not duplicate notifications")
 do {
     let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty")

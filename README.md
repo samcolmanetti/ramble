@@ -87,6 +87,7 @@ Every layer reports itself. `~/Library/Logs/Ramble.log` says which one gave up.
 | Symptom | Cause | Fix |
 |---|---|---|
 | Press the button, nothing happens | Accessibility — the log says `failed: Accessibility permission not granted` | Menu bar → **Already enabled? Repair it…** Toggling the switch is not enough after an upgrade |
+| Dictation starts on its own | The audio link activating puts the mic in its recording state, and it reports that exactly like a press | Handled: a start within 400 ms of the device's `0x09` announcement is ignored. See [PROTOCOL.md](PROTOCOL.md) |
 | Menu bar stuck on *Scanning* | The mic is off, asleep, or another BLE central holds it | Wake the mic; quit the Instamic Remote app — the device allows exactly one |
 | It types, but nothing is transcribed | The mic is connected for BLE but not as an audio input | Set `"audio": {"autoConnect": true}`, or connect it in Bluetooth settings |
 | Everything sounds like a phone call | The mic took over playback as well — HFP is a headset profile | `autoConnect` hands playback back automatically; otherwise set output in Sound settings |

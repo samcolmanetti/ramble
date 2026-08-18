@@ -130,8 +130,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(disabledItem(String(format: "   take running %.0fs", take)))
         }
 
+        // Pick which dictation service handles apps without a specific rule.
+        menu.addItem(.separator())
+        let targetItem = NSMenuItem(title: "Dictation app", action: nil, keyEquivalent: "")
+        let targetMenu = NSMenu()
+        for target in config.targets {
+            guard let name = target.name else { continue }
+            let item = NSMenuItem(title: name, action: #selector(selectTarget(_:)),
+                                  keyEquivalent: "")
+            item.target = self
+            item.representedObject = name
+            item.state = (name == config.activeRule.name) ? .on : .off
+            // Show what it will actually send, so an unconfigured target is
+            // obvious before you switch to it and wonder why nothing happens.
+            let summary = target.onStart?.summary ?? "not configured"
+            item.toolTip = "start \(summary) · \((target.mode ?? config.mode).rawValue)"
+            if target.onStart == nil { item.title = "\(name)  (not configured)" }
+            targetMenu.addItem(item)
+        }
+        targetItem.submenu = targetMenu
+        menu.addItem(targetItem)
+        menu.addItem(disabledItem("   \(config.activeRule.name ?? "none"): "
+            + "\(config.activeRule.onStart?.summary ?? "nothing")"))
+
         // Which rule the *current* frontmost app would use. Answers "why didn't
-        // it do what I expected" without opening the config file.
+        // it do what I expected" without opening the config file. A per-app rule
+        // overrides the chosen target, so this can differ from the line above.
         let frontmost = NSWorkspace.shared.frontmostApplication
         let rule = config.rule(for: frontmost?.bundleIdentifier)
         menu.addItem(.separator())
@@ -231,6 +255,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !firingEnabled, machine.isRecording {
             record(machine.abort(reason: "firing paused"))
         }
+        rebuildMenu()
+    }
+
+    @objc private func selectTarget(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        // Switching mid-take would leave a held key stranded under the old rule.
+        if machine.isRecording { record(machine.abort(reason: "switched dictation app")) }
+        config.selectTarget(named: name)
+        machine.config = config
+        try? config.save()          // persist, so the choice survives a restart
+        EventLog.shared.write("dictation app switched to \(name)")
+        note("switched to \(name)")
         rebuildMenu()
     }
 

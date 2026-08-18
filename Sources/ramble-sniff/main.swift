@@ -340,8 +340,9 @@ if shouldFire {
         }
         machine = TriggerMachine(config: config)
         print("firing enabled — mode: \(config.mode.rawValue), \(config.rules.count) app rules")
-        print("  default: start \(config.defaultRule.onStart?.summary ?? "nothing")"
-            + " / stop \(config.defaultRule.onStop?.summary ?? "nothing")")
+        let active = config.activeRule
+        print("  target [\(active.name ?? "?")]: start \(active.onStart?.summary ?? "nothing")"
+            + " / stop \(active.onStop?.summary ?? "nothing")")
         for rule in config.rules {
             print("  \(rule.name ?? rule.bundleIDs.joined(separator: ",")): "
                 + "start \(rule.onStart?.summary ?? "nothing")"

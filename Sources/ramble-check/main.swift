@@ -164,9 +164,10 @@ func machine(frontmost: String?, mode: TriggerMode = .toggle)
     var shellCalls: [String] = []
     let config = Config(
         mode: mode,
-        defaultRule: Rule(name: "default", bundleIDs: [],
-                          onStart: Action(key: "d", mods: ["cmd"]),
-                          onStop: Action(key: "d", mods: ["cmd"])),
+        targets: [Rule(name: "default", bundleIDs: [],
+                       onStart: Action(key: "d", mods: ["cmd"]),
+                       onStop: Action(key: "d", mods: ["cmd"]))],
+        activeTarget: "default",
         rules: [
             Rule(name: "terminal", bundleIDs: ["com.mitchellh.ghostty"],
                  onStart: Action(key: "space"), onStop: Action(key: "space")),
@@ -275,9 +276,10 @@ do {
     // mode cannot serve both, so the rule must be able to override it.
     let config = Config(
         mode: .toggle,
-        defaultRule: Rule(name: "wispr", bundleIDs: [],
-                          onStart: Action(key: "fn"), onStop: Action(key: "fn"),
-                          mode: .hold),
+        targets: [Rule(name: "wispr", bundleIDs: [],
+                       onStart: Action(key: "fn"), onStop: Action(key: "fn"),
+                       mode: .hold)],
+        activeTarget: "wispr",
         rules: [Rule(name: "claude", bundleIDs: ["com.mitchellh.ghostty"],
                      onStart: Action(key: "space", mods: ["shift"]),
                      onStop: Action(key: "space", mods: ["shift"]),
@@ -326,9 +328,10 @@ do {
     // machine stays .recording forever, and every later press is ignored -- the
     // LED turns red but nothing ever fires again.
     let config = Config(mode: .hold,
-                        defaultRule: Rule(name: "wispr", bundleIDs: [],
-                                          onStart: Action(key: "fn"),
-                                          onStop: Action(key: "fn")))
+                        targets: [Rule(name: "wispr", bundleIDs: [],
+                                       onStart: Action(key: "fn"),
+                                       onStop: Action(key: "fn"))],
+                        activeTarget: "wispr")
     let keys = FakeKeystroke()
     let m = TriggerMachine(config: config, frontmostBundleID: { nil },
                            runShell: { _ in }, keystroke: keys)
@@ -376,9 +379,10 @@ do {
     // The dangerous case: hold mode presses Fn, then the link drops. Without
     // abort() the modifier stays physically down system-wide.
     let config = Config(mode: .hold,
-                        defaultRule: Rule(name: "wispr", bundleIDs: [],
-                                          onStart: Action(key: "fn"),
-                                          onStop: Action(key: "fn")))
+                        targets: [Rule(name: "wispr", bundleIDs: [],
+                                       onStart: Action(key: "fn"),
+                                       onStop: Action(key: "fn"))],
+                        activeTarget: "wispr")
     let keys = FakeKeystroke()
     let m = TriggerMachine(config: config, frontmostBundleID: { nil },
                            runShell: { _ in }, keystroke: keys)
@@ -412,9 +416,10 @@ do {
 group("a take that never stops times out")
 do {
     let config = Config(mode: .hold,
-                        defaultRule: Rule(name: "wispr", bundleIDs: [],
-                                          onStart: Action(key: "fn"),
-                                          onStop: Action(key: "fn")))
+                        targets: [Rule(name: "wispr", bundleIDs: [],
+                                       onStart: Action(key: "fn"),
+                                       onStop: Action(key: "fn"))],
+                        activeTarget: "wispr")
     let keys = FakeKeystroke()
     let m = TriggerMachine(config: config, frontmostBundleID: { nil },
                            runShell: { _ in }, keystroke: keys)
@@ -431,9 +436,10 @@ do {
 group("runaway guard pauses firing instead of machine-gunning hotkeys")
 do {
     let config = Config(mode: .hold,
-                        defaultRule: Rule(name: "wispr", bundleIDs: [],
-                                          onStart: Action(key: "fn"),
-                                          onStop: Action(key: "fn")))
+                        targets: [Rule(name: "wispr", bundleIDs: [],
+                                       onStart: Action(key: "fn"),
+                                       onStop: Action(key: "fn"))],
+                        activeTarget: "wispr")
     let keys = FakeKeystroke()
     let m = TriggerMachine(config: config, frontmostBundleID: { nil },
                            runShell: { _ in }, keystroke: keys)
@@ -465,6 +471,69 @@ do {
     expectEqual(keys.pressed.count, 4, "firing resumes after reset")
 }
 
+group("switchable dictation targets")
+do {
+    var config = Config(
+        mode: .toggle,
+        targets: [
+            Rule(name: "Wispr Flow", onStart: Action(key: "fn"),
+                 onStop: Action(key: "fn"), mode: .hold),
+            Rule(name: "MacWhisper", onStart: Action(key: "m", mods: ["cmd", "shift"]),
+                 onStop: Action(key: "m", mods: ["cmd", "shift"])),
+            Rule(name: "Off"),
+        ],
+        activeTarget: "Wispr Flow",
+        rules: [Rule(name: "terminal", bundleIDs: ["com.mitchellh.ghostty"],
+                     onStart: Action(key: "space"), onStop: Action(key: "space"))]
+    )
+
+    expectEqual(config.activeRule.name, "Wispr Flow", "active target is the selected one")
+    expectEqual(config.rule(for: "com.apple.Safari").onStart?.summary, "🌐fn",
+                "an app without a rule uses the active target")
+    // The point of per-app rules: they survive switching the global target.
+    expectEqual(config.rule(for: "com.mitchellh.ghostty").onStart?.summary, "SPACE",
+                "a per-app rule beats the active target")
+
+    config.selectTarget(named: "MacWhisper")
+    expectEqual(config.activeRule.name, "MacWhisper", "switching changes the active target")
+    expectEqual(config.rule(for: "com.apple.Safari").onStart?.summary, "⇧⌘M",
+                "and changes what unmatched apps send")
+    expectEqual(config.rule(for: "com.mitchellh.ghostty").onStart?.summary, "SPACE",
+                "but leaves per-app rules alone")
+
+    config.selectTarget(named: "Off")
+    expect(config.rule(for: "com.apple.Safari").onStart == nil,
+           "the Off target sends nothing")
+
+    config.selectTarget(named: "Nonexistent")
+    expectEqual(config.activeRule.name, "Off", "an unknown target name is ignored")
+}
+
+group("configs written before targets existed still load")
+do {
+    // defaultRule was the old shape. Dropping support would break anyone who
+    // upgraded, so it stays as a fallback.
+    let legacy = """
+    {"mode":"toggle","autoReconnect":true,
+     "defaultRule":{"name":"old","bundleIDs":[],"onStart":{"key":"fn"}},
+     "rules":[]}
+    """
+    let decoded = try! JSONDecoder().decode(Config.self, from: Data(legacy.utf8))
+    expectEqual(decoded.activeRule.name, "old", "legacy defaultRule becomes the active rule")
+    expectEqual(decoded.rule(for: "com.apple.Safari").onStart?.summary, "🌐fn",
+                "and still resolves actions")
+}
+
+group("targets may omit bundleIDs")
+do {
+    let json = """
+    {"targets":[{"name":"T","onStart":{"key":"space"}}],"activeTarget":"T"}
+    """
+    let decoded = try! JSONDecoder().decode(Config.self, from: Data(json.utf8))
+    expectEqual(decoded.activeRule.name, "T", "a target without bundleIDs decodes")
+    expectEqual(decoded.rule(for: "anything").onStart?.summary, "SPACE", "and applies")
+}
+
 group("config round-trips through JSON")
 do {
     let original = Config.starter()
@@ -475,7 +544,7 @@ do {
                 "starter config sends a bare Space to terminals — modifiers are"
                     + " unreliable through a terminal")
     expectEqual(decoded.rule(for: "com.apple.Safari").onStart?.summary, "🌐fn",
-                "starter default is Wispr Flow's Fn push-to-talk")
+                "starter active target is Wispr Flow's Fn push-to-talk")
     expectEqual(decoded.rule(for: "com.apple.Safari").mode, .hold,
                 "the Wispr Flow rule holds rather than taps")
 }

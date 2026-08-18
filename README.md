@@ -22,7 +22,7 @@ Requires the Swift toolchain. **Xcode is not needed** — Command Line Tools are
 enough (`xcode-select --install`).
 
 ```sh
-swift run ramble-check       # test suite — 120 checks, no hardware needed
+swift run ramble-check       # test suite — 132 checks, no hardware needed
 Scripts/bundle.sh            # assemble build/Ramble.app
 open build/Ramble.app
 ```
@@ -62,18 +62,17 @@ it changes.
 ```json
 {
   "mode": "toggle",
-  "defaultRule": {
-    "name": "Wispr Flow (push-to-talk)",
-    "bundleIDs": [],
-    "mode": "hold",
-    "onStart": { "key": "fn" },
-    "onStop":  { "key": "fn" }
-  },
+  "activeTarget": "Wispr Flow",
+  "targets": [
+    { "name": "Wispr Flow", "mode": "hold",
+      "onStart": { "key": "fn" }, "onStop": { "key": "fn" } },
+    { "name": "MacWhisper" },
+    { "name": "Off" }
+  ],
   "rules": [
     {
       "name": "Claude Code voice",
       "bundleIDs": ["com.mitchellh.ghostty", "com.googlecode.iterm2"],
-      "mode": "toggle",
       "onStart": { "key": "space" },
       "onStop":  { "key": "space" }
     }
@@ -81,22 +80,32 @@ it changes.
 }
 ```
 
-- **Rules match the frontmost app's bundle ID**; first match wins, otherwise
-  `defaultRule`.
-- **`mode` is per-rule.** `hold` presses the key at start and releases it at
-  stop — required for push-to-talk like Wispr Flow's Fn. `toggle` taps it both
-  times. One global mode can't serve both, which is why rules override it.
+Two layers, and the distinction is the useful part:
+
+- **`targets`** are the dictation services you switch between — pick one from the
+  menu bar's **Dictation app** submenu. The choice is saved to disk. Whichever is
+  active handles any app without its own rule.
+- **`rules`** are per-app overrides matched on the frontmost app's bundle ID, and
+  they **beat the active target**. So "Claude Code voice whenever I'm in the
+  terminal, whatever I picked everywhere else" needs no switching at all.
+
+Other behavior worth knowing:
+
+- **`mode` is per-rule.** `hold` presses the key at start and releases it at stop
+  — required for push-to-talk like Wispr Flow's Fn. `toggle` taps it both times.
+  One global mode can't serve both, which is why rules and targets override it.
 - **The rule is latched when the take starts.** Begin dictating in the terminal,
   switch to a browser, press stop — the stop keystroke still goes to the
   terminal's rule. Otherwise you'd leave the first app recording forever.
-- **`"onStart": null` mutes an app** entirely — useful for a password manager.
+- **A target or rule with no `onStart` does nothing** — that's what `"Off"` is,
+  and how you mute an app like a password manager.
 - **`{"shell": "..."}`** works instead of a key, for anything driven by a URL
   scheme or CLI.
 - **Avoid modifiers on terminal targets.** Terminals send the same byte for
-  Space and Shift+Space unless the Kitty keyboard protocol's disambiguation
-  mode happens to be active, and Ghostty was observed dropping Cmd entirely on
-  the way to the TUI. Global hotkeys like Wispr Flow's Fn are intercepted
-  before the terminal, so they're unaffected.
+  Space and Shift+Space unless the Kitty keyboard protocol's disambiguation mode
+  happens to be active, and Ghostty was observed dropping Cmd entirely on the
+  way to the TUI. Global hotkeys like Wispr Flow's Fn are intercepted before the
+  terminal, so they're unaffected.
 
 Find a bundle ID with:
 

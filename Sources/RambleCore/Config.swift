@@ -42,7 +42,7 @@ public struct Rule: Codable, Equatable {
     /// cannot serve both.
     public var mode: TriggerMode?
 
-    public init(name: String? = nil, bundleIDs: [String],
+    public init(name: String? = nil, bundleIDs: [String] = [],
                 onStart: Action? = nil, onStop: Action? = nil,
                 mode: TriggerMode? = nil) {
         self.name = name
@@ -55,6 +55,16 @@ public struct Rule: Codable, Equatable {
     public func matches(bundleID: String?) -> Bool {
         guard let bundleID else { return false }
         return bundleIDs.contains { $0.caseInsensitiveCompare(bundleID) == .orderedSame }
+    }
+
+    /// `bundleIDs` is meaningless for a named target, so let it be omitted.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decodeIfPresent(String.self, forKey: .name)
+        bundleIDs = try c.decodeIfPresent([String].self, forKey: .bundleIDs) ?? []
+        onStart = try c.decodeIfPresent(Action.self, forKey: .onStart)
+        onStop = try c.decodeIfPresent(Action.self, forKey: .onStop)
+        mode = try c.decodeIfPresent(TriggerMode.self, forKey: .mode)
     }
 }
 
@@ -70,22 +80,57 @@ public enum TriggerMode: String, Codable {
 public struct Config: Codable, Equatable {
     public var mode: TriggerMode
     public var autoReconnect: Bool
-    public var defaultRule: Rule
+    /// Named dictation services, switchable from the menu bar. Whichever one is
+    /// active handles any app without a specific rule.
+    public var targets: [Rule]
+    /// Name of the active entry in `targets`.
+    public var activeTarget: String?
+    /// Per-app overrides. These beat the active target, so "Claude Code voice in
+    /// the terminal, whatever I picked everywhere else" works without switching.
     public var rules: [Rule]
+    /// Fallback for configs written before `targets` existed.
+    public var defaultRule: Rule?
 
     public init(mode: TriggerMode = .toggle,
                 autoReconnect: Bool = true,
-                defaultRule: Rule,
-                rules: [Rule] = []) {
+                targets: [Rule] = [],
+                activeTarget: String? = nil,
+                rules: [Rule] = [],
+                defaultRule: Rule? = nil) {
         self.mode = mode
         self.autoReconnect = autoReconnect
-        self.defaultRule = defaultRule
+        self.targets = targets
+        self.activeTarget = activeTarget
         self.rules = rules
+        self.defaultRule = defaultRule
     }
 
-    /// First matching rule wins; otherwise the default.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decodeIfPresent(TriggerMode.self, forKey: .mode) ?? .toggle
+        autoReconnect = try c.decodeIfPresent(Bool.self, forKey: .autoReconnect) ?? true
+        targets = try c.decodeIfPresent([Rule].self, forKey: .targets) ?? []
+        activeTarget = try c.decodeIfPresent(String.self, forKey: .activeTarget)
+        rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
+        defaultRule = try c.decodeIfPresent(Rule.self, forKey: .defaultRule)
+    }
+
+    /// The target currently handling apps without a specific rule.
+    public var activeRule: Rule {
+        if let activeTarget, let match = targets.first(where: { $0.name == activeTarget }) {
+            return match
+        }
+        return targets.first ?? defaultRule ?? Rule(name: "none", bundleIDs: [])
+    }
+
+    /// First matching per-app rule wins; otherwise the active target.
     public func rule(for bundleID: String?) -> Rule {
-        rules.first { $0.matches(bundleID: bundleID) } ?? defaultRule
+        rules.first { $0.matches(bundleID: bundleID) } ?? activeRule
+    }
+
+    public mutating func selectTarget(named name: String) {
+        guard targets.contains(where: { $0.name == name }) else { return }
+        activeTarget = name
     }
 
     public static var path: URL {
@@ -101,17 +146,23 @@ public struct Config: Codable, Equatable {
         Config(
             mode: .toggle,
             autoReconnect: true,
-            // Wispr Flow's push-to-talk is a bare Fn/Globe hold — read out of
-            // its own config.json, where prefs.user.shortcuts maps "63" to
-            // "ptt" and 63 is kVK_Function. Hold mode presses Fn on the button
-            // press and releases it on the next one.
-            defaultRule: Rule(
-                name: "Wispr Flow (push-to-talk)",
-                bundleIDs: [],
-                onStart: Action(key: "fn"),
-                onStop: Action(key: "fn"),
-                mode: .hold
-            ),
+            targets: [
+                // Wispr Flow's push-to-talk is a bare Fn/Globe hold — read out
+                // of its own config.json, where prefs.user.shortcuts maps "63"
+                // to "ptt" and 63 is kVK_Function. Hold mode presses Fn on the
+                // button press and releases it on the next one.
+                Rule(name: "Wispr Flow",
+                     bundleIDs: [],
+                     onStart: Action(key: "fn"),
+                     onStop: Action(key: "fn"),
+                     mode: .hold),
+                // Placeholders: no action until you set the real hotkey, which
+                // beats guessing and silently typing something wrong.
+                Rule(name: "MacWhisper", bundleIDs: [], onStart: nil, onStop: nil),
+                Rule(name: "superwhisper", bundleIDs: [], onStart: nil, onStop: nil),
+                Rule(name: "Off", bundleIDs: [], onStart: nil, onStop: nil),
+            ],
+            activeTarget: "Wispr Flow",
             rules: [
                 // Claude Code's voice:pushToTalk default, in tap mode: one tap
                 // starts, the next sends.

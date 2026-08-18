@@ -1,6 +1,24 @@
 # Instamic → Mac Dictation Trigger — Handoff
 
-**Status:** Protocol reverse-engineered, unverified against a second capture. No code written yet.
+> **Superseded, kept as the source record.** This is the original handoff, written
+> before any code existed. It is preserved because the implementation and the other
+> documents cite its section numbers as evidence (§2 for what was ruled out, §3 for
+> the GATT reference, §4 for the opcode table, §6 for the duplicate-notification
+> behaviour), and because a couple of its conclusions were later *overturned* by
+> measurement — which is itself worth keeping on the record.
+>
+> For what is actually true and shipped, read these instead:
+>
+> - [PROTOCOL.md](PROTOCOL.md) — the verified wire protocol
+> - [FINDINGS.md](FINDINGS.md) — every measurement, including the corrections to this document
+> - [README.md](README.md) — how to build, configure, and install it
+>
+> In particular, §2's claim that BLE and Bluetooth Classic audio are mutually
+> exclusive on this device **is wrong** — see FINDINGS.md. The mic works as
+> microphone and trigger simultaneously, which is the whole reason this project
+> exists.
+
+**Status (historical):** Protocol reverse-engineered, unverified against a second capture. No code written yet.
 **Deliverable:** A macOS menu bar app (Swift, CoreBluetooth) that fires a global hotkey when the Instamic's physical record button is pressed.
 
 ---

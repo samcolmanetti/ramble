@@ -7,6 +7,14 @@ Companion to [`instamic-ble-trigger-handoff.md`](instamic-ble-trigger-handoff.md
 which holds the reverse-engineered BLE protocol and the list of dead ends. This
 document covers *what we build and in what order*.
 
+> **Written before the build; parts of it are now historical.** The architecture
+> and config sections below describe the design as planned, and the code moved
+> on in places — there is no `RuleEngine.swift` (the state machine lives in
+> `Sources/RambleCore/TriggerMachine.swift`), and the config grew `targets`,
+> `activeTarget` and a per-rule `mode` rather than the single `defaultAction`
+> sketched here. For the config as it actually is, see the Configuration section
+> of [README.md](README.md); for the shipped architecture, read the sources.
+
 ---
 
 ## 1. What this is

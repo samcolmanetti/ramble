@@ -45,8 +45,8 @@ one BLE central; if the official app holds it, `ramble-sniff` will scan forever.
 swift run ramble-check
 ```
 
-Should print `PASS 42/42 checks`. This is pure parser logic — no hardware
-involved. Note that the handoff records opcodes and payloads but not checksum
+Should print `PASS` with every check passing. This is pure parser logic — no
+hardware involved. Note that the handoff records opcodes and payloads but not checksum
 bytes, so these cases are reconstructed from the documented rule. They prove the
 parser is self-consistent; step 3 is what proves the rule itself is right.
 
@@ -153,6 +153,31 @@ Worth noting in the capture log, since a second session costs another setup:
   exactly which byte disagreed.
 - Whether `0x03` ever carries a payload other than `0x35`/`0x36`. The tool flags
   this specifically rather than lumping it in with other traffic.
+
+---
+
+## 5. Config safety, by hand
+
+`ramble-check` covers `Config` load/save directly, but the reload *policy* lives
+in `AppDelegate`, which the suite cannot instantiate — AppKit needs a running
+app. These four steps take a minute and cover the one failure that destroys a
+user's work.
+
+With Ramble running and a config you have edited by hand:
+
+1. **Break the file.** Add a stray comma to `~/.config/ramble/config.json` and
+   save. The menu should show a config error naming the bad key — not a generic
+   Foundation sentence — and the mic button should keep firing the rules from
+   before the edit. Nothing should silently revert to the starter config.
+2. **Try to save while it is broken.** Pick a different app from the *Dictation
+   app* submenu. The menu should say it is not saving until the error is fixed,
+   and `config.json` on disk must still contain **your** broken text — not a
+   starter config written over it. This is the regression that matters.
+3. **Fix the file.** Remove the comma and save. The error should clear on its
+   own (the file is watched), and switching dictation app should persist again.
+4. **Add an unknown key.** Put `"futureSetting": 1` at the top level, save, then
+   switch dictation app from the menu. Re-open the file: `futureSetting` must
+   still be there.
 
 ---
 

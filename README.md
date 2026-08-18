@@ -1,116 +1,148 @@
-# Ramble
+<div align="center">
 
-Turns the physical record button on a Zoom Instamic into a per-application
-dictation trigger for macOS. Press the button on the mic clipped to your collar;
-Wispr Flow, MacWhisper, or Claude Code voice mode starts recording. Press again;
-it stops.
+# 🎙️ Ramble
 
-The Instamic is both the **microphone** and the **trigger**, over Bluetooth,
-simultaneously — see [PROTOCOL.md](PROTOCOL.md) for how, and why the vendor
-documentation says that's impossible.
+**Your mic's record button, wired to your dictation app.**
 
-- [PROTOCOL.md](PROTOCOL.md) — the wire protocol, shareable
-- [FINDINGS.md](FINDINGS.md) — everything measured, including corrections
-- [PLAN.md](PLAN.md) — architecture and build order
-- [VERIFY.md](VERIFY.md) — hardware verification procedure
+Press the button on the Instamic clipped to your collar — Wispr Flow starts listening.
+Press it again — it stops. No keyboard, no menu, no reaching for the laptop.
+
+[![CI](https://github.com/samcolmanetti/ramble/actions/workflows/ci.yml/badge.svg)](https://github.com/samcolmanetti/ramble/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-black.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/macOS-13%2B-black.svg)](#-install)
+[![Swift](https://img.shields.io/badge/Swift-6-black.svg)](Package.swift)
+
+</div>
 
 ---
 
-## Build
+## ✨ The trick
 
-Requires the Swift toolchain. **Xcode is not needed** — Command Line Tools are
-enough (`xcode-select --install`).
+The Instamic is your **microphone** *and* your **trigger** — at the same time, over
+Bluetooth. The vendor documentation says that's impossible.
 
-```sh
-swift run ramble-check       # test suite — 136 checks, no hardware needed
-Scripts/bundle.sh            # assemble build/Ramble.app
-open build/Ramble.app
+It isn't. [**PROTOCOL.md**](PROTOCOL.md) shows the wire protocol that proves it.
+
+```
+  🔘 button press          📡 BLE frame            ⌨️  synthesized key
+   on the mic     ──────▶   03 [36]      ──────▶    into the frontmost app
+                                                            │
+                                                            ▼
+                                                   🗣️ dictation starts
 ```
 
-`swift test` does not work here: XCTest and swift-testing both ship inside
-Xcode, so the suite is a plain executable instead. It exits non-zero on failure,
-so CI treats it like any other test command.
+Whichever app is in front decides which key gets sent. Terminal gets Space for
+Claude Code voice; everything else gets whatever your dictation app wants.
 
-### Sign once, or re-grant permissions forever
+---
 
-macOS ties Accessibility and Bluetooth grants to a binary's **code signature**.
-Ad-hoc signing keys them to a hash that changes on every build, so each rebuild
-re-prompts and leaves a stale entry in System Settings.
+## 📦 Install
 
 ```sh
-Scripts/make-signing-cert.sh   # prints the one-time Keychain Access steps
+brew install --cask samcolmanetti/tap/ramble
 ```
 
-Five minutes, then grants survive rebuilds. `bundle.sh` picks the identity up
-automatically and falls back to ad-hoc with a warning.
+Installs `Ramble.app`, puts the diagnostic tools on your `PATH`, and registers a
+LaunchAgent so it starts at login and restarts if it dies.
 
-## Tools
+> [!IMPORTANT]
+> **Two permissions, both prompted on first launch.** Without Accessibility,
+> everything connects and nothing types — the menu bar warns you when it's missing.
+>
+> 🔵 **Bluetooth** · read the button &nbsp;&nbsp;|&nbsp;&nbsp; ♿️ **Accessibility** · send the key
 
-| | |
+<details>
+<summary><b>🔧 Then set up the mic — one minute, once per machine</b></summary>
+
+<br>
+
+| Step | Why |
 |---|---|
-| `Ramble` | the menu bar app |
-| `ramble-sniff` | connect and print decoded frames; `--fire` to send hotkeys |
-| `ramble-tap` | watch what the OS actually receives from a synthesized keystroke |
-| `ramble-level` | measure whisper level and SNR through the mic |
-| `ramble-check` | the test suite |
+| Pair the Instamic, set **Bluetooth Microphone Mode** | Both audio and BLE at once |
+| **Quit the Instamic Remote app** | The device allows exactly one BLE central — while that app is open, Ramble can never connect |
+| Set Sound **output** back to your speakers | macOS routes both directions to a Bluetooth headset by default and drops all system audio to 16 kHz |
+| Match your dictation app's hotkey in `config.json` | So the right key gets sent |
 
-## Configuration
+Permissions are tied to the machine and can't be copied between them.
 
-`~/.config/ramble/config.json`, written on first run and **hot-reloaded** when
-it changes.
+</details>
 
-```json
+---
+
+## ⚙️ Configuration
+
+`~/.config/ramble/config.json` — written on first run, **hot-reloaded** on save.
+
+```jsonc
 {
-  "mode": "toggle",
   "activeTarget": "Wispr Flow",
   "targets": [
-    { "name": "Wispr Flow", "mode": "hold",
-      "onStart": { "key": "fn" }, "onStop": { "key": "fn" } },
+    { "name": "Wispr Flow", "mode": "hold", "onStart": { "key": "fn" } },
     { "name": "MacWhisper" },
     { "name": "Off" }
   ],
   "rules": [
-    {
-      "name": "Claude Code voice",
+    { "name": "Claude Code voice",
       "bundleIDs": ["com.mitchellh.ghostty", "com.googlecode.iterm2"],
-      "onStart": { "key": "space" },
-      "onStop":  { "key": "space" }
-    }
+      "onStart": { "key": "space" }, "onStop": { "key": "space" } }
   ]
 }
 ```
 
 Two layers, and the distinction is the useful part:
 
-- **`targets`** are the dictation services you switch between — pick one from the
-  menu bar's **Dictation app** submenu. The choice is saved to disk. Whichever is
-  active handles any app without its own rule.
-- **`rules`** are per-app overrides matched on the frontmost app's bundle ID, and
-  they **beat the active target**. So "Claude Code voice whenever I'm in the
-  terminal, whatever I picked everywhere else" needs no switching at all.
+| | What it is |
+|---|---|
+| 🎯 **`targets`** | The dictation services you switch between, from the menu bar's **Dictation app** submenu. The active one handles any app without its own rule. |
+| 📌 **`rules`** | Per-app overrides matched on bundle ID. **These beat the active target** — so "Claude Code voice in the terminal, whatever I picked everywhere else" needs no switching at all. |
 
-Other behavior worth knowing:
+### 🎛️ Modes
 
-- **`mode` is per-rule.** `hold` presses the key at start and releases it at stop
-  — required for push-to-talk like Wispr Flow's Fn. `toggle` taps it both times.
-  One global mode can't serve both, which is why rules and targets override it.
-- **The rule is latched when the take starts.** Begin dictating in the terminal,
-  switch to a browser, press stop — the stop keystroke still goes to the
-  terminal's rule. Otherwise you'd leave the first app recording forever.
-- **A target or rule with no `onStart` does nothing** — that's what `"Off"` is,
-  and how you mute an app like a password manager.
-- **`{"shell": "..."}`** works instead of a key, for anything driven by a URL
-  scheme or CLI.
-- **`"showMenuBarIcon": false`** hides the status item. Ramble keeps running and
-  the button keeps working — the icon is a window onto it, not the thing itself.
-  Set it back to `true` and the icon reappears on save, since the file is
-  watched. The menu's *Hide menu bar icon…* item says this before hiding, so
-  it's never a one-way door.
-- **Avoid modifiers on terminal targets.** Terminals send the same byte for
-  Space and Shift+Space unless the Kitty keyboard protocol's disambiguation mode
-  happens to be active, and Ghostty was observed dropping Cmd entirely on the
-  way to the TUI. Global hotkeys like Wispr Flow's Fn are intercepted before the
-  terminal, so they're unaffected.
+| Mode | Behavior | Use it for |
+|---|---|---|
+| **`toggle`** *(default)* | Taps the key at start, taps again at stop | Almost everything |
+| **`hold`** | Presses at start, releases at stop | True push-to-talk, like Wispr Flow's Fn |
+
+> [!TIP]
+> Leave `mode` out and you get `toggle`. Ask for `hold` explicitly, per rule.
+> In `hold` mode **`onStop` is ignored** — ending a hold means lifting whatever is
+> physically down, so Ramble releases exactly the chord it pressed.
+
+<details>
+<summary><b>🛟 What happens when things go wrong mid-sentence</b></summary>
+
+<br>
+
+A held key always comes back up: on disconnect, on Bluetooth switching off, on
+quit, on `SIGTERM` from a Homebrew upgrade, on a mid-take config reload, and after
+a 300-second take with no stop.
+
+If a release ever *fails* — you revoked Accessibility mid-take — the menu names the
+key that's still down and Ramble retries every five seconds until it succeeds.
+
+The rule **and** the mode are latched when the take starts. Begin dictating in the
+terminal, switch to a browser, press stop: the stop key still goes to the terminal's
+rule. Otherwise you'd leave the first app recording forever.
+
+</details>
+
+<details>
+<summary><b>📋 Every other option</b></summary>
+
+<br>
+
+| Option | Effect |
+|---|---|
+| No `onStart` | Does nothing — that's what `"Off"` is, and how you mute a password manager |
+| `{"shell": "..."}` | Runs a command instead of a key, for URL schemes and CLIs |
+| `"showMenuBarIcon": false` | Hides the icon; Ramble keeps running. Set it back to `true` and it reappears on save |
+
+> [!WARNING]
+> **Avoid modifiers on terminal targets.** Terminals send the same byte for Space
+> and Shift+Space unless the Kitty keyboard protocol's disambiguation mode is
+> active, and Ghostty was observed dropping Cmd entirely on the way to the TUI.
+> Global hotkeys like Wispr Flow's Fn are intercepted before the terminal, so
+> they're unaffected.
 
 Find a bundle ID with:
 
@@ -118,46 +150,68 @@ Find a bundle ID with:
 osascript -e 'id of app "Wispr Flow"'
 ```
 
+</details>
+
 ---
 
-## Distributing to another Mac
+## 🧰 Tools
 
-Via Homebrew, from [samcolmanetti/homebrew-tap](https://github.com/samcolmanetti/homebrew-tap):
+Shipped inside the app bundle — they're the difference between "it doesn't work"
+and knowing *which* of the four layers failed.
+
+| | |
+|---|---|
+| 🎙️ `Ramble` | The menu bar app |
+| 📡 `ramble-sniff` | Connect and print decoded frames; `--fire` to send hotkeys |
+| ⌨️ `ramble-tap` | Watch what the OS actually receives from a synthesized keystroke |
+| 📊 `ramble-level` | Measure your whisper level and signal-to-noise ratio |
+| ✅ `ramble-check` | The test suite |
+
+---
+
+## 🛠️ Build from source
+
+**Xcode is not needed** — Command Line Tools are enough.
 
 ```sh
-brew install --cask samcolmanetti/tap/ramble
+xcode-select --install
+git clone https://github.com/samcolmanetti/ramble && cd ramble
+
+Scripts/make-signing-cert.sh   # one-time: grants survive rebuilds
+Scripts/bundle.sh --release
+cp -R build/Ramble.app /Applications/
 ```
 
-The cask installs `Ramble.app`, exposes `ramble-sniff`, `ramble-tap` and
-`ramble-level` on `PATH`, and registers a LaunchAgent so it starts at login and
-restarts if it dies.
-
-### Cutting a release
+A locally built app has no quarantine attribute, so there's no Gatekeeper friction
+at all. For your own machines, this is the least annoying path.
 
 ```sh
-Scripts/release.sh 0.1.0            # build, zip, checksum, update the cask
-Scripts/release.sh 0.1.0 --publish  # ...and create the GitHub release
+swift run ramble-check   # the test suite — no hardware needed
 ```
 
-`release.sh` rewrites `version` and `sha256` in `Casks/ramble.rb`; copy that
-file into the tap and push.
+`swift test` doesn't work here: XCTest and swift-testing both ship inside Xcode, so
+the suite is a plain executable. It exits non-zero on failure, so CI treats it like
+any other test command.
 
-The zip is made with `ditto`, not `zip`, because `zip` can invalidate a bundle's
-code signature.
+<details>
+<summary><b>🔏 The signing problem, honestly</b></summary>
 
-### The signing problem, honestly
+<br>
 
-There's no Developer ID here, so builds are **ad-hoc signed**. That has one
-consequence worth stating plainly rather than burying:
+There's no Developer ID here, so builds are **ad-hoc signed**. One consequence is
+worth stating plainly rather than burying:
 
-**Every upgrade breaks the permissions.** macOS ties Accessibility and Bluetooth
-grants to a binary's code signature; an ad-hoc signature is a content hash, so a
-new build is a different app as far as TCC is concerned. After
-`brew upgrade --cask ramble` you must toggle Accessibility off and back on. The
-cask's caveats say so, matching the same warning in
-`aerospace-swipe-intercept`.
+> [!CAUTION]
+> **Every upgrade breaks the permissions.** macOS ties Accessibility and Bluetooth
+> grants to a binary's code signature. An ad-hoc signature is a content hash, so a
+> new build is a different app as far as TCC is concerned. After
+> `brew upgrade --cask ramble`, toggle Accessibility off and back on.
 
-Fixing it properly means an Apple Developer Program membership ($99/yr):
+Locally, `Scripts/make-signing-cert.sh` creates a stable self-signed identity in
+five minutes, and grants survive every rebuild. `bundle.sh` picks it up
+automatically and falls back to ad-hoc with a warning.
+
+Fixing it *properly* means an Apple Developer Program membership ($99/yr):
 
 ```sh
 Scripts/bundle.sh --release --identity "Developer ID Application: Name (TEAMID)"
@@ -170,38 +224,43 @@ With a stable Developer ID the signature is identical across builds, so grants
 survive upgrades and Gatekeeper stops complaining. Worth it only if this goes to
 people who won't tolerate re-granting.
 
-### Building from source instead
+</details>
 
-Needs Command Line Tools and nothing else — no Xcode:
+<details>
+<summary><b>🚀 Cutting a release</b></summary>
+
+<br>
 
 ```sh
-xcode-select --install
-git clone https://github.com/samcolmanetti/ramble && cd ramble
-Scripts/make-signing-cert.sh    # one-time; stable identity, grants survive rebuilds
-Scripts/bundle.sh --release
-cp -R build/Ramble.app /Applications/
+Scripts/release.sh 0.1.0            # build, zip, checksum, update the cask
+Scripts/release.sh 0.1.0 --publish  # ...and create the GitHub release
 ```
 
-A locally built app has no quarantine attribute, so there's no Gatekeeper
-friction at all. For your own machines this is the least annoying path.
+It rewrites `version` and `sha256` in `Casks/ramble.rb`, then **verifies the
+checksum actually landed** and refuses to continue if it didn't. Copy the cask into
+your tap and push.
 
-### Per-machine setup, regardless of install method
+The zip is made with `ditto`, not `zip`, because `zip` can invalidate a bundle's
+code signature.
 
-Permissions can't be copied between machines:
+</details>
 
-1. **Bluetooth** — prompted on first launch
-2. **Accessibility** — without it, everything connects and nothing types. The
-   menu bar shows a warning when it's missing.
+---
 
-Then:
+## 📚 Docs
 
-- Pair the Instamic and put it in **Bluetooth Microphone Mode**
-- **Quit the Instamic Remote app** — the device allows exactly one BLE central
-- Set Sound output back to your speakers; macOS routes both directions to a
-  Bluetooth headset by default and drops all system audio to 16 kHz
-- Set your transcription app's hotkey and match it in `config.json`
+| | |
+|---|---|
+| 📡 [PROTOCOL.md](PROTOCOL.md) | The wire protocol — shareable, and the interesting one |
+| 🔬 [FINDINGS.md](FINDINGS.md) | Everything measured, including the corrections |
+| 🏗️ [PLAN.md](PLAN.md) | Architecture and build order |
+| ✅ [VERIFY.md](VERIFY.md) | Hardware verification procedure |
+| 📜 [handoff](instamic-ble-trigger-handoff.md) | The original reverse-engineering notes, superseded but still cited |
 
-### Start at login
+---
 
-The cask installs a LaunchAgent that handles this. For a source build, drop
-`Ramble.app` into System Settings → General → Login Items.
+<div align="center">
+
+MIT — see [LICENSE](LICENSE)
+
+</div>

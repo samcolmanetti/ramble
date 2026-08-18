@@ -47,6 +47,14 @@ final class Sniffer: BLEClientDelegate {
     private var takeCount = 0
     private var frameCount = 0
 
+    // A mode that streams audio over GATT would emit hundreds of notifications
+    // per second and bury the button events. Above a threshold, roll everything
+    // except 0x03 up into a once-per-second summary.
+    private var window: [UInt8: (count: Int, bytes: Int)] = [:]
+    private var windowStart = Date()
+    private var rolledUp = false
+    private static let rollupThreshold = 12
+
     func bleStateChanged(_ state: BLEState) {
         sawBluetoothState = true
         switch state {
@@ -92,6 +100,38 @@ final class Sniffer: BLEClientDelegate {
 
     func bleDidReceive(frame: Frame, event: RecordEvent, raw: [UInt8]) {
         frameCount += 1
+
+        var entry = window[frame.opcode] ?? (0, 0)
+        entry.count += 1
+        entry.bytes += raw.count
+        window[frame.opcode] = entry
+
+        let elapsed = Date().timeIntervalSince(windowStart)
+        if elapsed >= 1 {
+            let total = window.values.reduce(0) { $0 + $1.count }
+            if total >= Self.rollupThreshold {
+                if !rolledUp {
+                    print("\(stamp())  high frame rate — rolling up all but 0x03")
+                    rolledUp = true
+                }
+                let parts = window.sorted { $0.key < $1.key }.map {
+                    String(format: "%02X×%d (%dB)", $0.key, $0.value.count, $0.value.bytes)
+                }
+                let bytes = window.values.reduce(0) { $0 + $1.bytes }
+                print(String(format: "%@  %.0f fps  %.1f kbps  %@", stamp(),
+                             Double(total) / elapsed, Double(bytes) * 8 / elapsed / 1000,
+                             parts.joined(separator: "  ")))
+            } else {
+                rolledUp = false
+            }
+            window.removeAll()
+            windowStart = Date()
+        }
+
+        // 0x03 is the trigger and always prints, however loud the stream is.
+        let isTrigger = frame.opcode == 0x03
+        guard isTrigger || !rolledUp else { return }
+
         var line = String(format: "%@  op %02X  [%@]", stamp(), frame.opcode, frame.payload.hex)
 
         switch event {

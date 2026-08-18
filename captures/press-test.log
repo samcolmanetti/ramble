@@ -41,3 +41,8 @@ ramble-sniff — ctrl-C to stop
 21:16:32.883  op 02  [44 02]
 21:16:34.383  op 02  [49 07 77 E9 C0 49 37 01 02]
 21:16:34.534  op 03  [36]   ■ RECORD STOP   held 11.37s
+
+── summary ──────────────────────────────────
+ran for      680s
+frames       34
+takes        4

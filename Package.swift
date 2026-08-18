@@ -10,6 +10,7 @@ let package = Package(
         .executable(name: "ramble-check", targets: ["ramble-check"]),
         .executable(name: "ramble-level", targets: ["ramble-level"]),
         .executable(name: "ramble-tap", targets: ["ramble-tap"]),
+        .executable(name: "Ramble", targets: ["Ramble"]),
     ],
     targets: [
         .target(name: "RambleCore", swiftSettings: [.swiftLanguageMode(.v5)]),
@@ -17,6 +18,8 @@ let package = Package(
                           swiftSettings: [.swiftLanguageMode(.v5)]),
         // The test suite is an executable, not a testTarget: XCTest and
         // swift-testing both ship with Xcode, which this machine does not have.
+        .executableTarget(name: "Ramble", dependencies: ["RambleCore"],
+                          swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "ramble-tap", dependencies: ["RambleCore"],
                           swiftSettings: [.swiftLanguageMode(.v5)]),
         .executableTarget(name: "ramble-level", dependencies: ["RambleCore"],

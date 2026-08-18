@@ -4,4 +4,5 @@
 *.xcodeproj
 Package.resolved
 build/
-Ramble.app/
+
+build/

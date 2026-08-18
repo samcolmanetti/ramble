@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>            <string>Ramble</string>
+    <key>CFBundleDisplayName</key>     <string>Ramble</string>
+    <key>CFBundleExecutable</key>      <string>Ramble</string>
+    <key>CFBundleIdentifier</key>      <string>io.ramble.Ramble</string>
+    <key>CFBundlePackageType</key>     <string>APPL</string>
+    <key>CFBundleShortVersionString</key> <string>__VERSION__</string>
+    <key>CFBundleVersion</key>         <string>__BUILD__</string>
+    <key>LSMinimumSystemVersion</key>  <string>13.0</string>
+
+    <!-- Menu bar only: no Dock icon, no main window. -->
+    <key>LSUIElement</key>             <true/>
+
+    <!-- Shown verbatim in the permission dialog. Say why, not what. -->
+    <key>NSBluetoothAlwaysUsageDescription</key>
+    <string>Ramble listens for the record button on your Instamic so pressing it can start and stop dictation.</string>
+</dict>
+</plist>

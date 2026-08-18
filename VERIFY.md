@@ -106,7 +106,14 @@ Press the record button four times with **deliberately different durations**:
 | 1 | ~2 seconds |
 | 2 | ~10 seconds |
 | 3 | ~2 seconds |
-| 4 | ~10 seconds |
+| 4 | **~45 seconds** |
+
+The long one is not optional. The device emits a `02 [44 02]` frame on a
+15-second timer, and an early version of this project mistook that frame for
+the button press because every verification take was shorter than 15 s. Any
+take that clears the timer by a wide margin exposes internal periodic traffic
+that short takes cannot. **Always include one take several times longer than
+the others.**
 
 The tool measures and prints each gap:
 

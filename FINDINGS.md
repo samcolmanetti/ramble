@@ -81,7 +81,53 @@ The length byte is what fixes the boundary, and frame sizes matched throughout.
 
 ---
 
-## The finding that changes the design: `0x03 [36]` lags the button by 1.65 s
+## ⚠️ CORRECTED: `02 [44 02]` is a 15-second timer, not the button press
+
+**The section immediately below was wrong, and the corrected conclusion is:
+stop on `03 [36]`, never on `02 [44 02]`.**
+
+The original conclusion came from four takes that were all shorter than 15
+seconds. Longer takes show `02 [44 02]` firing on a fixed timer:
+
+| Take | `[44 02]` offsets from start | `0x36` offset | last `[44 02]` → `0x36` |
+|---|---|---|---|
+| 2 | 15.00 s | 48.72 s | 33.72 s |
+| 4 | 15.03 s, 40.50 s | 41.64 s | 1.14 s |
+| 6 | 15.00 s, 33.51 s | 34.65 s | 1.14 s |
+
+Measured first-`[44 02]` offsets across five takes: **15.00, 15.02, 15.03,
+15.00, 15.00 s**. No human presses a button at exactly 15.00 s five times.
+
+So `[44 02]` is emitted both by a 15 s timer *and* at the real press. Triggering
+on it **truncates every dictation at 15 seconds** — which is exactly what
+"Wispr Flow cuts out / doesn't trigger" looked like in practice.
+
+Worse, it is not even reliably emitted at the real stop: take 2 ran 48.7 s and
+produced *only* the 15 s frame.
+
+Distinguishing the real one requires waiting ~1.1 s to see whether `0x36`
+follows — which costs precisely the latency the optimization was meant to save.
+So there is nothing to recover here.
+
+**`03 [36]` is the trigger.** It costs ~1.1 s of flush delay, and that delay is
+harmless: it appends about a second of trailing silence, which the transcriber
+discards anyway. Losing everything after 15 seconds is not harmless.
+
+### Why the original reading was convincing, and wrong
+
+The four verification takes were 3.60, 6.93, 3.54 and 9.78 s — all under the
+timer. Within that window `[44 02]` really did land ~1.1–1.6 s before `0x36`
+every time, with a standard deviation of 13 ms. The tightness of that number
+was read as proof of a causal relationship. It was really just the flush delay
+being consistent, measured on a sample that could not exhibit the failure.
+
+The lesson worth keeping: **the verification protocol tested duration
+discrimination but never tested a duration longer than any internal timer.**
+A take of 30 s in the original protocol would have caught this immediately.
+
+---
+
+## SUPERSEDED — the original 1.65 s reasoning
 
 Every cycle has the same shape. Start:
 

@@ -15,11 +15,15 @@ public enum TriggerOutcome: Equatable {
 ///
 /// The rules this encodes, all of them earned from measurements in FINDINGS.md:
 ///
-/// - **Stop fires on `02 [44 02]`, not `03 [36]`.** The device only sends
-///   `0x36` after flushing the file to storage — 1.05 s later in Bluetooth
-///   Microphone Mode, 1.64 s in Remote Control Mode. Waiting for it would append
-///   over a second of dead air to every dictation. `0x36` remains a fallback for
-///   the case where the press frame is missed.
+/// - **Stop fires on `03 [36]`, never on `02 [44 02]`.** An earlier version did
+///   the opposite, on the evidence of four takes that were all shorter than 15
+///   seconds. `02 [44 02]` is emitted by a **15-second timer** as well as at the
+///   real button press — measured at 15.00, 15.02, 15.03, 15.00 and 15.00 s
+///   across five takes, which no human produces — so triggering on it truncates
+///   every dictation at 15 s. It is also not reliably emitted at the real stop
+///   at all: one 48.7 s take produced only the 15 s one. `03 [36]` costs about
+///   1.1 s of flush delay and is unambiguous. Trailing silence is cheap;
+///   losing everything after 15 seconds is not.
 /// - **The rule is latched at start.** Whichever app was frontmost when you
 ///   pressed the button owns the whole take, so switching apps mid-dictation
 ///   can't send the stop keystroke somewhere else and leave the first app
@@ -59,6 +63,12 @@ public final class TriggerMachine {
         if case .recording = state { return true }
         return false
     }
+
+    /// Genuine duplicate notifications arrive within milliseconds of each other
+    /// (handoff §6). A second 0x35 later than this is not a duplicate — it means
+    /// the device started a new recording while we still believed the previous
+    /// take was running, i.e. our state is stale.
+    public var duplicateWindow: TimeInterval = 0.5
 
     /// A take is abandoned after this long. Guards against a stop frame that
     /// never arrives — without it, a missed stop in hold mode leaves a modifier
@@ -119,25 +129,30 @@ public final class TriggerMachine {
     public func handle(_ event: RecordEvent) -> TriggerOutcome {
         switch event {
         case .recordStarted:
-            guard case .idle = state else {
-                return .ignored(reason: "already recording")
+            if case .recording(_, _, let since) = state {
+                let age = Date().timeIntervalSince(since)
+                guard age > duplicateWindow else {
+                    return .ignored(reason: "duplicate start")
+                }
+                // The device just started recording, so whatever we thought was
+                // in flight is gone — most likely its stop frame was lost to a
+                // dropped link. Recover rather than swallowing every start from
+                // here on, which looks to the user like the trigger silently
+                // dying and never coming back.
+                abort(reason: String(format: "stale take, %.0fs old", age))
             }
             let rule = config.rule(for: frontmostBundleID())
             state = .recording(rule: rule, held: nil, since: Date())
             return perform(rule.onStart, phase: .start, rule: rule)
 
         case .stopPress:
-            guard case .recording(let rule, _, _) = state else {
-                return .ignored(reason: "stop press with no active take")
-            }
-            state = .idle
-            return perform(rule.onStop, phase: .stop, rule: rule)
+            // Ambiguous: fires both on a 15-second timer and at the real press.
+            // Logged by the CLI, never acted on. See the note above.
+            return .ignored(reason: "02 [44 02] is ambiguous — waiting for 0x36")
 
         case .recordStopped:
-            // Normally already idle, because 02 [44 02] arrived ~1.5 s earlier
-            // and handled the stop. Reaching here means that frame was missed.
             guard case .recording(let rule, _, _) = state else {
-                return .ignored(reason: "stop already handled or no active take")
+                return .ignored(reason: "stop with no active take")
             }
             state = .idle
             return perform(rule.onStop, phase: .stop, rule: rule)

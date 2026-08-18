@@ -220,27 +220,25 @@ expectEqual(cfg.rule(for: "COM.MITCHELLH.GHOSTTY").name, "terminal", "bundle mat
 expectEqual(cfg.rule(for: "com.unknown.app").name, "default", "unmatched app falls back to default")
 expectEqual(cfg.rule(for: nil).name, "default", "nil frontmost falls back to default")
 
-group("stop fires on the press frame, not the delayed state frame")
+group("stop fires on 0x36 only — 02 [44 02] is a 15s timer, not the button")
 do {
     let (m, _, _) = machine(frontmost: "com.mitchellh.ghostty")
     let started = m.handle(START)
     expectEqual(actionOf(started), "SPACE", "start fires the terminal rule")
     expect(m.isRecording, "machine is recording after start")
 
-    let stopped = m.handle(STOP_PRESS)
-    expectEqual(actionOf(stopped), "SPACE", "02 [44 02] fires the stop")
-    expect(!m.isRecording, "machine is idle after stop press")
+    // The bug this guards: 02 [44 02] arrives at exactly 15.00s regardless of
+    // when the button is pressed. Acting on it truncated every dictation at 15s.
+    expect(isIgnored(m.handle(STOP_PRESS)), "02 [44 02] does not stop the take")
+    expect(m.isRecording, "still recording after the 15s timer frame")
+    // It can arrive more than once in a long take; none of them may fire.
+    expect(isIgnored(m.handle(STOP_PRESS)), "a second 02 [44 02] also does nothing")
+    expect(m.isRecording, "still recording")
 
-    // 0x36 arrives 1.0-1.6s later; it must not fire a second keystroke.
-    expect(isIgnored(m.handle(STOP_STATE)), "trailing 0x36 does not double-fire")
-}
-
-group("0x36 still works as a fallback if the press frame is missed")
-do {
-    let (m, _, _) = machine(frontmost: nil)
-    _ = m.handle(START)
-    expectEqual(actionOf(m.handle(STOP_STATE)), "⌘D", "0x36 alone still stops")
-    expect(!m.isRecording, "machine is idle after fallback stop")
+    let stopped = m.handle(STOP_STATE)
+    expectEqual(actionOf(stopped), "SPACE", "0x36 is what actually stops")
+    expect(!m.isRecording, "machine is idle after 0x36")
+    expect(isIgnored(m.handle(STOP_STATE)), "a repeated 0x36 does not double-fire")
 }
 
 group("rule is latched at start, not re-resolved at stop")
@@ -253,7 +251,7 @@ do {
     expectEqual(actionOf(m.handle(START)), "SPACE", "started in the terminal")
     // User switches to another app mid-dictation.
     frontmost = "com.unknown.app"
-    expectEqual(actionOf(m.handle(STOP_PRESS)), "SPACE",
+    expectEqual(actionOf(m.handle(STOP_STATE)), "SPACE",
                 "stop replays the terminal rule, not the new app's")
     expectEqual(keys.taps, ["SPACE", "SPACE"], "both keystrokes went to the terminal chord")
 }
@@ -289,7 +287,7 @@ do {
     let w = TriggerMachine(config: config, frontmostBundleID: { "com.other.app" },
                            runShell: { _ in }, keystroke: wisprKeys)
     _ = w.handle(START)
-    _ = w.handle(STOP_PRESS)
+    _ = w.handle(STOP_STATE)
     expectEqual(wisprKeys.pressed, ["🌐fn"], "default rule holds Fn down on start")
     expectEqual(wisprKeys.released, ["🌐fn"], "default rule releases Fn on stop")
     expectEqual(wisprKeys.taps, [], "default rule never taps despite global mode being toggle")
@@ -298,7 +296,7 @@ do {
     let c = TriggerMachine(config: config, frontmostBundleID: { "com.mitchellh.ghostty" },
                            runShell: { _ in }, keystroke: claudeKeys)
     _ = c.handle(START)
-    _ = c.handle(STOP_PRESS)
+    _ = c.handle(STOP_STATE)
     expectEqual(claudeKeys.taps, ["⇧SPACE", "⇧SPACE"], "terminal rule taps twice")
     expectEqual(claudeKeys.pressed, [], "terminal rule never holds")
 }
@@ -309,7 +307,7 @@ do {
     _ = m.handle(START)
     expectEqual(keys.pressed, ["SPACE"], "hold mode presses on start")
     expectEqual(keys.released, [], "hold mode has not released yet")
-    _ = m.handle(STOP_PRESS)
+    _ = m.handle(STOP_STATE)
     expectEqual(keys.released, ["SPACE"], "hold mode releases on stop")
     expectEqual(keys.taps, [], "hold mode never taps")
 }
@@ -322,11 +320,35 @@ do {
     expect(isIgnored(m.handle(STOP_PRESS)), "bare 02 [44 02] while idle is ignored")
 }
 
+group("a stale take recovers instead of swallowing every start")
+do {
+    // The failure this prevents: a stop frame is lost to a dropped link, the
+    // machine stays .recording forever, and every later press is ignored -- the
+    // LED turns red but nothing ever fires again.
+    let config = Config(mode: .hold,
+                        defaultRule: Rule(name: "wispr", bundleIDs: [],
+                                          onStart: Action(key: "fn"),
+                                          onStop: Action(key: "fn")))
+    let keys = FakeKeystroke()
+    let m = TriggerMachine(config: config, frontmostBundleID: { nil },
+                           runShell: { _ in }, keystroke: keys)
+    m.duplicateWindow = 0.1
+    _ = m.handle(START)
+    expectEqual(keys.pressed, ["🌐fn"], "first take holds fn")
+    // Stop frame never arrives. Next press starts a new recording.
+    Thread.sleep(forTimeInterval: 0.15)
+    let recovered = m.handle(START)
+    expectEqual(actionOf(recovered), "🌐fn", "a later start fires instead of being ignored")
+    expectEqual(keys.released, ["🌐fn"], "the stale hold was released first")
+    expectEqual(keys.pressed, ["🌐fn", "🌐fn"], "and the new take holds again")
+    expect(m.isRecording, "machine is tracking the new take")
+}
+
 group("duplicate and non-trigger frames")
 do {
     let (m, _, _) = machine(frontmost: nil)
     _ = m.handle(START)
-    expect(isIgnored(m.handle(START)), "duplicate start is ignored")
+    expect(isIgnored(m.handle(START)), "duplicate start within the window is ignored")
     expect(isIgnored(m.handle(START_PRESS)), "02 [48 02] does not fire (0x35 follows)")
     expect(isIgnored(m.handle(frame(0x04, [0x44, 0xFF]))), "0x04 is not a trigger")
     expect(isIgnored(m.handle(frame(0x02, [0x3A, 0x03, 0x4C]))), "other 0x02 payloads are not triggers")

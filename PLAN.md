@@ -13,7 +13,7 @@ document covers *what we build and in what order*.
 
 ```
 Instamic button press
-      ↓  BLE notify on FF11, opcode 0x03, payload 0x35
+      ↓  BLE notify on FF11 (opcode 0x03 / 0x35 to start, 0x02 / [44 02] to stop)
 Ramble (menu bar, always running)
       ↓  look up rule for the frontmost app
       ↓  synthesize keystroke via CGEvent
@@ -91,7 +91,7 @@ ramble/
 │   ├── RambleCore/              # no UI, fully testable
 │   │   ├── Frame.swift          # 00 02 <len> <op> <payload> <chk> parse + validate
 │   │   ├── RecordEvent.swift    # frame → .recordStarted / .recordStopped / .other
-│   │   ├── BLEClient.swift      # CBCentralManager, scan by FF10, reconnect/backoff
+│   │   ├── BLEClient.swift      # CBCentralManager, wide scan, reconnect/backoff
 │   │   ├── Keystroke.swift      # CGEvent emission, key name → keycode table
 │   │   ├── RuleEngine.swift     # frontmost bundle ID → action, with start/stop latch
 │   │   └── Config.swift         # ~/.config/ramble/config.json, load + watch
@@ -180,7 +180,17 @@ SPM package, `.gitignore`, signing cert script, empty `RambleCore` with the fram
 parser ported from the handoff plus unit tests over the seven captured frames.
 Tests pass before any hardware is involved.
 
-### Phase 1 — `ramble-sniff`, and protocol verification *(the real risk)*
+### Phase 1 — `ramble-sniff`, and protocol verification ✅ *done*
+
+**Verified against hardware — see [`FINDINGS.md`](FINDINGS.md).** The `0x03`
+hypothesis holds. Two things changed as a result: the advertisement carries
+`FF11` rather than `FF10`, so scanning by the handoff's service UUID finds
+nothing; and `03 [36]` trails the actual button press by a consistent 1.65 s, so
+the stop trigger must fire on `02 [44 02]` instead or every dictation gains 1.65 s
+of dead air.
+
+<details><summary>Original Phase 1 plan</summary>
+
 
 A CLI that scans for service `FF10`, connects, subscribes to `FF11`, and prints
 every decoded frame with a millisecond timestamp, opcode, payload hex, and
@@ -212,6 +222,8 @@ Phase 2 work would survive it.
 Also worth logging in this phase: what the `0x02` and `0x04` payloads do across
 long vs short takes. If `0x02` carries battery or remaining-storage, that is free
 menu bar telemetry in Phase 3.
+
+</details>
 
 ### Phase 2 — Actions and the rule engine
 

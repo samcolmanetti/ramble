@@ -85,9 +85,13 @@ public final class BLEClient: NSObject {
     }
 
     /// Does this advertisement look like our device?
+    ///
+    /// Observed advertisement: local name "Instamic", service UUID list `[FF11]`
+    /// — the *characteristic* UUID, not the FF10 service it lives under. So match
+    /// on either, and on the name.
     private func matches(peripheral: CBPeripheral, advertisement: [String: Any]) -> Bool {
         if let uuids = advertisement[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID],
-           uuids.contains(instamicServiceUUID) {
+           uuids.contains(instamicServiceUUID) || uuids.contains(instamicNotifyUUID) {
             return true
         }
         let names = [
@@ -137,7 +141,9 @@ extension BLEClient: CBCentralManagerDelegate {
         guard matches(peripheral: peripheral, advertisement: advertisementData) else { return }
 
         guard connectOnMatch else {
-            delegate?.bleLog("MATCH: \(peripheral.name ?? "?") (\(peripheral.identifier)) rssi \(RSSI)")
+            if isNew {
+                delegate?.bleLog("MATCH: \(peripheral.name ?? "?") (\(peripheral.identifier)) rssi \(RSSI)")
+            }
             return
         }
         central.stopScan()
@@ -152,7 +158,10 @@ extension BLEClient: CBCentralManagerDelegate {
     public func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         reconnectDelay = 1
         delegate?.bleStateChanged(.connected(peripheral.name ?? "Instamic"))
-        peripheral.discoverServices([instamicServiceUUID])
+        // Discover *all* services rather than just FF10. The advertisement
+        // disagreed with the handoff's GATT dump about which UUID is the
+        // service, so take a live inventory instead of trusting either.
+        peripheral.discoverServices(nil)
     }
 
     public func centralManager(_ central: CBCentralManager,
@@ -172,17 +181,39 @@ extension BLEClient: CBCentralManagerDelegate {
     }
 }
 
+/// Compact property flags for the GATT inventory, e.g. `[NRW]`.
+private func props(_ p: CBCharacteristicProperties) -> String {
+    var s = ""
+    if p.contains(.notify) { s += "N" }
+    if p.contains(.indicate) { s += "I" }
+    if p.contains(.read) { s += "R" }
+    if p.contains(.write) { s += "W" }
+    if p.contains(.writeWithoutResponse) { s += "w" }
+    return s.isEmpty ? "" : "[\(s)]"
+}
+
 extension BLEClient: CBPeripheralDelegate {
     public func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error {
             delegate?.bleLog("service discovery failed: \(error.localizedDescription)")
             return
         }
-        guard let service = peripheral.services?.first(where: { $0.uuid == instamicServiceUUID }) else {
-            delegate?.bleLog("FF10 not present — is this the right device?")
-            return
+        let services = peripheral.services ?? []
+        delegate?.bleLog("services: \(services.map(\.uuid.uuidString).joined(separator: ", "))")
+
+        // Prefer FF10 per the handoff's GATT dump, but the advertised UUID was
+        // FF11 — so if FF10 is absent, sweep every service for the notify
+        // characteristic rather than giving up.
+        if let service = services.first(where: { $0.uuid == instamicServiceUUID }) {
+            peripheral.discoverCharacteristics(nil, for: service)
+        } else if services.isEmpty {
+            delegate?.bleLog("no services found — device may need a reconnect")
+        } else {
+            delegate?.bleLog("FF10 absent; sweeping all services for FF11")
+            for service in services {
+                peripheral.discoverCharacteristics(nil, for: service)
+            }
         }
-        peripheral.discoverCharacteristics([instamicNotifyUUID], for: service)
     }
 
     public func peripheral(_ peripheral: CBPeripheral,
@@ -192,13 +223,17 @@ extension BLEClient: CBPeripheralDelegate {
             delegate?.bleLog("characteristic discovery failed: \(error.localizedDescription)")
             return
         }
-        guard let ch = service.characteristics?.first(where: { $0.uuid == instamicNotifyUUID }) else {
-            delegate?.bleLog("FF11 not found on FF10")
-            return
+        let chars = service.characteristics ?? []
+        if !chars.isEmpty {
+            let described = chars.map { "\($0.uuid.uuidString)\(props($0.properties))" }
+            delegate?.bleLog("  \(service.uuid.uuidString): \(described.joined(separator: " "))")
         }
+        guard notifyCharacteristic == nil,
+              let ch = chars.first(where: { $0.uuid == instamicNotifyUUID }) else { return }
+
         notifyCharacteristic = ch
         peripheral.setNotifyValue(true, for: ch)
-        delegate?.bleLog("subscribed to FF11 — press the record button")
+        delegate?.bleLog("subscribed to FF11 on \(service.uuid.uuidString) — press the record button")
     }
 
     public func peripheral(_ peripheral: CBPeripheral,

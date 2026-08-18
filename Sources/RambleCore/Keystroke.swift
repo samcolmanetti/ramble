@@ -66,7 +66,7 @@ public enum KeystrokeError: Error, Equatable, CustomStringConvertible {
 /// not the character it produces), which is why they're a fixed table rather
 /// than anything derived from the current keyboard layout.
 public enum Keys {
-    static let table: [String: CGKeyCode] = [
+    public static let table: [String: CGKeyCode] = [
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8,
         "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15, "y": 16, "t": 17,
         "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23, "=": 24, "9": 25,
@@ -88,6 +88,40 @@ public enum Keys {
 
     public static func code(for name: String) -> CGKeyCode? {
         table[name.lowercased()]
+    }
+
+    /// Virtual keycodes macOS treats as modifiers. These are delivered as
+    /// `flagsChanged` events, never as keyDown/keyUp — so posting them the
+    /// ordinary way makes them invisible to anything watching for a modifier
+    /// hold, which is exactly how a bare-Fn push-to-talk is detected.
+    public static let modifierCodes: Set<CGKeyCode> = [
+        54, // right command
+        55, // command
+        56, // shift
+        57, // caps lock
+        58, // option
+        59, // control
+        60, // right shift
+        61, // right option
+        62, // right control
+        63, // fn / globe
+    ]
+
+    public static func isModifier(_ code: CGKeyCode) -> Bool {
+        modifierCodes.contains(code)
+    }
+
+    /// The flag a modifier keycode contributes when held.
+    public static func flag(for code: CGKeyCode) -> CGEventFlags {
+        switch code {
+        case 54, 55: return .maskCommand
+        case 56, 60: return .maskShift
+        case 57: return .maskAlphaShift
+        case 58, 61: return .maskAlternate
+        case 59, 62: return .maskControl
+        case 63: return .maskSecondaryFn
+        default: return []
+        }
     }
 
     public static var known: [String] { table.keys.sorted() }
@@ -138,7 +172,17 @@ public struct Keystroke: KeystrokeEmitting {
         guard let event = CGEvent(keyboardEventSource: source,
                                   virtualKey: chord.keyCode,
                                   keyDown: down) else { return }
-        event.flags = chord.flags
+
+        if Keys.isModifier(chord.keyCode) {
+            // A modifier is reported by its flag changing, not by a key going
+            // down. Posting keyDown/keyUp for Fn leaves every flagsChanged
+            // listener — the only way to observe a bare Fn hold — seeing nothing.
+            event.type = .flagsChanged
+            let own = Keys.flag(for: chord.keyCode)
+            event.flags = down ? chord.flags.union(own) : chord.flags.subtracting(own)
+        } else {
+            event.flags = chord.flags
+        }
         event.post(tap: .cghidEventTap)
     }
 

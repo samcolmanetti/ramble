@@ -298,6 +298,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                   action: #selector(openAccessibility), keyEquivalent: "")
             warn.target = self
             menu.addItem(warn)
+            // The upgrade case. Toggling the switch re-enables a binding to the
+            // *old* signature and changes nothing, which reads as the app being
+            // broken. Clearing the record is the only thing that works.
+            let repair = NSMenuItem(title: "   Already enabled? Repair it…",
+                                    action: #selector(repairAccessibility), keyEquivalent: "")
+            repair.target = self
+            menu.addItem(repair)
         }
 
         // The worst state this app can be in, so it says so plainly.
@@ -447,10 +454,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openAccessibility() {
         Keystroke.requestTrust()
-        let url = URL(string:
-            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
-        NSWorkspace.shared.open(url)
+        NSWorkspace.shared.open(Self.accessibilitySettingsURL)
     }
+
+    /// Clear the stale Accessibility record and ask again.
+    ///
+    /// After an upgrade the entry in System Settings is still listed and still
+    /// switched on, but it is bound to the previous build's code signature — an
+    /// ad-hoc signature is a content hash, so every build is a different app as
+    /// far as TCC is concerned. Toggling the switch rebinds nothing, which reads
+    /// as the app being broken. Removing the record is what makes macOS bind to
+    /// the app actually installed.
+    @objc private func repairAccessibility() {
+        let id = Bundle.main.bundleIdentifier ?? "io.ramble.Ramble"
+
+        let alert = NSAlert()
+        alert.messageText = "Repair the Accessibility permission?"
+        alert.informativeText = """
+        Ramble is listed in System Settings but macOS is still refusing it. That \
+        happens after an upgrade: the entry is bound to the old build's \
+        signature, so switching it off and on again rebinds nothing.
+
+        This clears Ramble's Accessibility record and asks for it again. You \
+        will need to allow it once more.
+        """
+        alert.addButton(withTitle: "Repair")
+        alert.addButton(withTitle: "Cancel")
+        alert.alertStyle = .informational
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let reset = Process()
+        reset.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        reset.arguments = ["reset", "Accessibility", id]
+        do {
+            try reset.run()
+            reset.waitUntilExit()
+            EventLog.shared.write("accessibility record reset for \(id)")
+        } catch {
+            note("could not reset the permission: \(error)")
+            NSWorkspace.shared.open(Self.accessibilitySettingsURL)
+            return
+        }
+
+        // Re-ask. With the record gone this prompts properly instead of being
+        // silently refused.
+        Keystroke.requestTrust()
+        NSWorkspace.shared.open(Self.accessibilitySettingsURL)
+        note("permission reset — allow Ramble in Settings")
+    }
+
+    private static let accessibilitySettingsURL = URL(string:
+        "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!
 }
 
 extension AppDelegate: BLEClientDelegate {

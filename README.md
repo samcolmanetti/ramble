@@ -77,6 +77,29 @@ Permissions are tied to the machine and can't be copied between them.
 
 </details>
 
+<details>
+<summary><b>🩺 When it isn't working</b></summary>
+
+<br>
+
+Every layer reports itself. `~/Library/Logs/Ramble.log` says which one gave up.
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Press the button, nothing happens | Accessibility — the log says `failed: Accessibility permission not granted` | Menu bar → **Already enabled? Repair it…** Toggling the switch is not enough after an upgrade |
+| Menu bar stuck on *Scanning* | The mic is off, asleep, or another BLE central holds it | Wake the mic; quit the Instamic Remote app — the device allows exactly one |
+| It types, but nothing is transcribed | The mic is connected for BLE but not as an audio input | Set `"audio": {"autoConnect": true}`, or connect it in Bluetooth settings |
+| Everything sounds like a phone call | The mic took over playback as well — HFP is a headset profile | `autoConnect` hands playback back automatically; otherwise set output in Sound settings |
+| Nothing happens at all, right after install | Gatekeeper blocked first launch | System Settings → Privacy & Security → **Open Anyway** |
+
+```sh
+ramble-sniff --scan-only   # is the mic advertising at all?
+ramble-tap                 # does the OS receive a synthesized keystroke?
+ramble-level               # is it loud enough to transcribe?
+```
+
+</details>
+
 ---
 
 ## ⚙️ Configuration
@@ -236,10 +259,22 @@ There's no Developer ID here, so builds are **ad-hoc signed**. One consequence i
 worth stating plainly rather than burying:
 
 > [!CAUTION]
-> **Every upgrade breaks the permissions.** macOS ties Accessibility and Bluetooth
-> grants to a binary's code signature. An ad-hoc signature is a content hash, so a
-> new build is a different app as far as TCC is concerned. After
-> `brew upgrade --cask ramble`, toggle Accessibility off and back on.
+> **Every upgrade breaks Accessibility.** macOS ties the grant to the app's code
+> signature. An ad-hoc signature is a content hash, so a new build is a different
+> app as far as TCC is concerned, and the button silently stops typing.
+>
+> **Toggling the switch off and on does not fix it.** The entry stays bound to the
+> old build — it reads as enabled and still does nothing. Clear the record instead:
+>
+> **Menu bar → `Already enabled? Repair it…`**
+>
+> or the same thing by hand:
+>
+> ```sh
+> tccutil reset Accessibility io.ramble.Ramble
+> ```
+>
+> Then allow Ramble when it asks.
 
 Locally, `Scripts/make-signing-cert.sh` creates a stable self-signed identity in
 five minutes, and grants survive every rebuild. `bundle.sh` picks it up

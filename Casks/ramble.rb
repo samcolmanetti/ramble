@@ -41,9 +41,17 @@ cask "ramble" do
       </plist>
     XML
     File.write(plist_path, plist_content)
+    # An upgrade leaves the previous version running with the job already
+    # bootstrapped, so `bootstrap` on its own is a no-op and the old binary
+    # keeps going — the new one never starts. Tear it down first.
     system_command "/bin/launchctl",
-                   args: ["bootstrap", "gui/#{Process.uid}", plist_path],
-                   sudo: false
+                   args:         ["bootout", "gui/#{Process.uid}/io.ramble.Ramble"],
+                   sudo:         false,
+                   must_succeed: false
+    system_command "/bin/launchctl",
+                   args:         ["bootstrap", "gui/#{Process.uid}", plist_path],
+                   sudo:         false,
+                   must_succeed: false
   end
 
   # `trash:`, not `delete:` — the LaunchAgent lives in the user's own home, and
@@ -73,9 +81,20 @@ cask "ramble" do
     Without Accessibility everything connects and nothing types. The menu bar
     shows a warning when it is missing.
 
-    IMPORTANT: after `brew upgrade --cask ramble`, toggle Accessibility off and
-    back on. The new build has a different code signature and macOS blocks it
-    until you re-authorize.
+    AFTER AN UPGRADE, Accessibility stops working. macOS ties the permission
+    to the app's signature, and an ad-hoc signature is a content hash, so every
+    build is a different app to it.
+
+    Toggling the switch off and on does NOT fix this. The entry stays bound to
+    the old build, so it looks enabled and still does nothing. Either:
+
+      Menu bar > "Already enabled? Repair it..."
+
+    or, equivalently, in a terminal:
+
+      tccutil reset Accessibility io.ramble.Ramble
+
+    Then allow Ramble when it asks.
 
     Mic setup:
       - Pair the Instamic and put it in Bluetooth Microphone Mode

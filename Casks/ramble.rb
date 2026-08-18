@@ -46,8 +46,11 @@ cask "ramble" do
                    sudo: false
   end
 
+  # `trash:`, not `delete:` — the LaunchAgent lives in the user's own home, and
+  # `delete:` runs under sudo, so an upgrade stopped to ask for a password it
+  # cannot be given non-interactively and left the install half-removed.
   uninstall launchctl: "io.ramble.Ramble",
-            delete:    "#{Dir.home}/Library/LaunchAgents/io.ramble.Ramble.plist"
+            trash:     "#{Dir.home}/Library/LaunchAgents/io.ramble.Ramble.plist"
 
   zap trash: [
     "~/.config/ramble",

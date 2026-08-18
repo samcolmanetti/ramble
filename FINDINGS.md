@@ -7,6 +7,52 @@ they disagree.
 
 ---
 
+## The headline: BLE and HFP are **not** mutually exclusive
+
+The handoff's §2 lists this under "what was ruled out — don't re-litigate":
+
+> **BLE and HFP are mutually exclusive on this device.** In Bluetooth Microphone
+> Mode (the only mode where the Mac hears audio), BLE and Classic Audio are
+> disabled — so the Mac cannot see button events.
+
+**This is wrong.** Measured directly (`captures/mode-bluetooth-mic.log`), with
+the device in Bluetooth Microphone Mode, all of the following were true at once:
+
+```
+Classic:   Instamic  Services: 0x1800001 < HFP ACL SCO >    ← audio link live
+Audio:     Instamic  Default Input Device: Yes  16000 Hz    ← it IS the system mic
+BLE:       connected, FF10 → FF11 [NRW], subscribed
+           21:30:29.201  op 03 [35]   ▶︎ RECORD START
+           21:30:32.686  op 03 [36]   ■ RECORD STOP  held 3.49s
+```
+
+The button events flow **while the Mac is using the Instamic as its microphone**.
+Note `SCO` in the Classic service list — that's the synchronous audio channel
+actually carrying voice, not just a control link.
+
+### What this means for the design
+
+The entire "expensive remote control" compromise in handoff §2 dissolves. The
+shipped architecture is not "Instamic triggers, some other mic records". It is:
+
+- **Instamic = the microphone** (16 kHz mono over HFP — which is also Whisper's
+  native input rate, so it costs nothing in transcription terms)
+- **Instamic's button = the trigger**, over BLE, concurrently
+- One hand, one device, and the close-mic placement that makes whispering in an
+  office viable in the first place
+
+No virtual audio driver, no voice-activity detection, no second microphone.
+
+### Why the handoff got it wrong
+
+It was reasoning from Zoom's "Configuration Modes and Profiles" document rather
+than from a measurement, and the note as transcribed is self-contradictory —
+it claims Classic Audio is disabled in the one mode where the Mac hears audio.
+Documentation about which modes the *vendor's app* uses is not the same as a
+firmware constraint.
+
+---
+
 ## Verdict: the `0x03` hypothesis holds
 
 Four presses, measured start-to-stop:
@@ -57,6 +103,10 @@ Stop:
 
 `02 [44 02]` → `03 [36]` measured **1.651, 1.650, 1.620, 1.651 s** — mean 1.643 s,
 standard deviation **13 ms**.
+
+**The lag is mode-dependent.** In Bluetooth Microphone Mode the same interval
+measures **1.051 and 1.050 s** rather than 1.643 s. So the delay cannot be
+compensated with a constant — the trigger has to key off `02 [44 02]` itself.
 
 Two human presses could never be that consistent relative to each other, so one
 event is machine-derived from the other. Causality settles which: the press is
@@ -139,6 +189,15 @@ Phase 4, not now.
 
 ---
 
+## Other observations from the mode probe
+
+- **Address rotation confirmed.** The peripheral identifier differed on every
+  session (`9EF037C8…`, then `D272B867…`). Matching by address would break
+  immediately, as the handoff warned.
+- **Connecting mid-recording is a real case.** The probe attached while the mic
+  was already recording and saw a bare `03 [36]` with no preceding `35`. The app
+  must treat a stop-without-start as benign and not fire a stray hotkey.
+
 ## Still outstanding
 
 - **10-minute idle soak** — running. Confirms `0x03` and `02 [44 02]` never fire
@@ -146,3 +205,6 @@ Phase 4, not now.
 - **Sleep/wake and out-of-range reconnect** — the address rotates, so reconnect
   is rediscovery rather than a cached handle.
 - **`[44 02]` uniqueness** over a longer window, before it becomes the stop trigger.
+- **End-to-end audio check** — confirm a whisper actually registers at usable
+  level through the 16 kHz HFP path. No `ffmpeg`/`sox` on this machine, so this
+  needs a small level meter built against AVAudioEngine.

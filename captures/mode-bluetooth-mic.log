@@ -1,0 +1,74 @@
+# mode: bluetooth-mic
+# date: Mon Aug 17 21:30:07 EDT 2026
+# --- macOS audio devices ---
+# Audio:
+#     Devices:
+#         XV272U V:
+#           Current SampleRate: 48000
+#           Transport: DisplayPort
+#         DELL U3225QE:
+#           Current SampleRate: 48000
+#           Transport: DisplayPort
+#         Instamic:
+#           Default Input Device: Yes
+#           Current SampleRate: 16000
+#           Transport: Bluetooth
+#         Instamic:
+#           Current SampleRate: 16000
+#           Transport: Bluetooth
+#         Yeti X:
+#           Current SampleRate: 48000
+#           Transport: USB
+#         Yeti X:
+#           Current SampleRate: 48000
+#           Transport: USB
+#         USB audio CODEC:
+#           Current SampleRate: 48000
+#           Transport: USB
+#         USB audio CODEC:
+#           Current SampleRate: 48000
+#           Transport: USB
+#         Logitech StreamCam:
+#           Current SampleRate: 48000
+#           Transport: USB
+#         MacBook Pro Microphone:
+#           Current SampleRate: 48000
+#           Transport: Built-in
+#         MacBook Pro Speakers:
+#           Current SampleRate: 48000
+#           Transport: Built-in
+# --- bluetooth classic ---
+#       Connected:
+#           Instamic:
+#               Address: 90:7B:C6:B4:F1:E4
+#               Vendor ID: 0x0A2F
+#               Product ID: 0x0001
+#               Firmware Version: 0.0.1
+#               Minor Type: Headphones
+#               RSSI: -73
+#               Services: 0x1800001 < HFP ACL SCO >
+#       Not Connected:
+# --- BLE ---
+ramble-sniff — ctrl-C to stop
+21:30:08.571  bluetooth powered on
+21:30:08.573  scanning…
+21:30:08.641  connecting to Instamic…
+21:30:08.641  found Instamic (D272B867-19AD-C8D8-0E6D-FC83CA40385E) rssi -64
+21:30:08.802  ✓ connected to Instamic
+21:30:09.249  services: 0000FF10-0000-1000-8000-00805F9B34FB, FCC1
+21:30:09.311    0000FF10-0000-1000-8000-00805F9B34FB: 0000FF11-0000-1000-8000-00805F9B34FB[NRW]
+21:30:09.311  subscribed to FF11 on 0000FF10-0000-1000-8000-00805F9B34FB — press the record button
+21:30:09.429  op 02  [49 07 77 E9 C0 0C 9F 01 02]
+21:30:09.430  op 07  [4F 0D 38 9D 04 1E 02]
+21:30:10.118  op 02  [44 02]
+21:30:11.169  op 03  [36]   ■ RECORD STOP   ⚠️ no matching start
+21:30:29.201  op 03  [35]   ▶︎ RECORD START  (take 1)
+21:30:29.231  op 04  [44 FF]
+21:30:29.261  op 02  [3A 03 4C]
+21:30:31.636  op 02  [44 02]
+21:30:32.686  op 03  [36]   ■ RECORD STOP   held 3.49s
+
+── summary ──────────────────────────────────
+ran for      40s
+frames       9
+takes        1

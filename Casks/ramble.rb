@@ -1,6 +1,6 @@
 cask "ramble" do
-  version "0.1.2"
-  sha256 "4660bac6e278ad51e8df88008c8b90461b7651578fb3733ac749e75f512eda15"
+  version "0.1.3"
+  sha256 "3e83df1698e08ce9aff38b39fb5afacea7cb0bdf10b720e9dee5f1bd917e8a06"
 
   url "https://github.com/samcolmanetti/ramble/releases/download/v#{version}/Ramble-v#{version}.zip"
   name "Ramble"

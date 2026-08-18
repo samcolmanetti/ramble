@@ -13,7 +13,9 @@ permissions:
 jobs:
   check:
     # macOS because the package links CoreBluetooth, AppKit and CoreGraphics.
-    runs-on: macos-14
+    # macos-15 rather than macos-14: the older image defaults to Swift 5.10 and
+    # Package.swift declares tools version 6.0.
+    runs-on: macos-15
 
     steps:
       - uses: actions/checkout@v4

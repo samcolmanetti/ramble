@@ -71,6 +71,32 @@ public struct Rule: Codable, Equatable {
     }
 }
 
+/// Keeping the mic as the system input without letting it take playback.
+public struct AudioSettings: Codable, Equatable {
+    /// Bring the mic up and claim the system input when it appears.
+    public var autoConnect: Bool
+    /// Substring matched against device names, both Bluetooth and CoreAudio.
+    public var device: String
+    /// Hand playback back to this when the mic takes it. Any output whose name
+    /// contains this wins; unset means "whatever else is available".
+    public var preferredOutput: String?
+
+    public init(autoConnect: Bool = false,
+                device: String = "Instamic",
+                preferredOutput: String? = nil) {
+        self.autoConnect = autoConnect
+        self.device = device
+        self.preferredOutput = preferredOutput
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
+        device = try c.decodeIfPresent(String.self, forKey: .device) ?? "Instamic"
+        preferredOutput = try c.decodeIfPresent(String.self, forKey: .preferredOutput)
+    }
+}
+
 public enum TriggerMode: String, Codable {
     /// Fire a full key tap on both start and stop. The Instamic's button is
     /// itself a toggle, so this is the natural fit and the default.
@@ -103,6 +129,8 @@ public struct Config: Codable, Equatable {
     public var rules: [Rule]
     /// Fallback for configs written before `targets` existed.
     public var defaultRule: Rule?
+    /// Microphone routing. Off unless asked for, since it changes system state.
+    public var audio: AudioSettings
 
     public init(mode: TriggerMode = .toggle,
                 autoReconnect: Bool = true,
@@ -110,7 +138,8 @@ public struct Config: Codable, Equatable {
                 targets: [Rule] = [],
                 activeTarget: String? = nil,
                 rules: [Rule] = [],
-                defaultRule: Rule? = nil) {
+                defaultRule: Rule? = nil,
+                audio: AudioSettings = AudioSettings()) {
         self.mode = mode
         self.autoReconnect = autoReconnect
         self.showMenuBarIcon = showMenuBarIcon
@@ -118,13 +147,14 @@ public struct Config: Codable, Equatable {
         self.activeTarget = activeTarget
         self.rules = rules
         self.defaultRule = defaultRule
+        self.audio = audio
     }
 
     /// Spelled out rather than synthesized so `save()` can tell a key this
     /// version does not model from one that is merely absent because its
     /// optional is nil.
     private enum CodingKeys: String, CodingKey, CaseIterable {
-        case mode, autoReconnect, showMenuBarIcon, targets, activeTarget, rules, defaultRule
+        case mode, autoReconnect, showMenuBarIcon, targets, activeTarget, rules, defaultRule, audio
     }
 
     public init(from decoder: Decoder) throws {
@@ -136,6 +166,7 @@ public struct Config: Codable, Equatable {
         activeTarget = try c.decodeIfPresent(String.self, forKey: .activeTarget)
         rules = try c.decodeIfPresent([Rule].self, forKey: .rules) ?? []
         defaultRule = try c.decodeIfPresent(Rule.self, forKey: .defaultRule)
+        audio = try c.decodeIfPresent(AudioSettings.self, forKey: .audio) ?? AudioSettings()
     }
 
     /// The target currently handling apps without a specific rule.

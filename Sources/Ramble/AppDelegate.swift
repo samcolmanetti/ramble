@@ -181,7 +181,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let recovered = machine.retryPendingRelease() {
             record(recovered)
         }
+        attachMic()
         rebuildMenu()
+    }
+
+    /// Keep the mic as the system input, and playback where the user left it.
+    ///
+    /// Driven from the tick rather than done once at connect: macOS re-grabs
+    /// output whenever the headset link comes back, so this has to be a standing
+    /// correction, not a one-off. Each pass is a no-op once things are right.
+    private var lastMicOutcome: MicAttach.Outcome?
+    private func attachMic() {
+        guard config.audio.autoConnect else { return }
+        let outcome = MicAttach.run(micName: config.audio.device,
+                                    preferredOutput: config.audio.preferredOutput)
+        // Only speak up when something changed, or a 5s timer becomes a log spammer.
+        if outcome != lastMicOutcome, outcome != .alreadyRight {
+            EventLog.shared.write("audio: \(outcome.description)")
+            note(outcome.description)
+        }
+        lastMicOutcome = outcome
     }
 
     // MARK: - Menu

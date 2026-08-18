@@ -2,15 +2,29 @@ import AVFoundation
 import CoreAudio
 import Foundation
 
-/// A CoreAudio input device.
-public struct AudioDevice {
+/// A CoreAudio device. A Bluetooth headset is both an input and an output, which
+/// is the entire difficulty this type exists to expose: connecting the Instamic
+/// for its microphone unavoidably offers macOS a speaker too.
+public struct AudioDevice: Equatable {
     public let id: AudioDeviceID
     public let name: String
     public let uid: String
     public let inputChannels: Int
+    public let outputChannels: Int
     public let sampleRate: Double
 
+    public init(id: AudioDeviceID, name: String, uid: String,
+                inputChannels: Int, outputChannels: Int = 0, sampleRate: Double = 0) {
+        self.id = id
+        self.name = name
+        self.uid = uid
+        self.inputChannels = inputChannels
+        self.outputChannels = outputChannels
+        self.sampleRate = sampleRate
+    }
+
     public var isInput: Bool { inputChannels > 0 }
+    public var isOutput: Bool { outputChannels > 0 }
 }
 
 public enum AudioDevices {
@@ -45,10 +59,11 @@ public enum AudioDevices {
         return value as String
     }
 
-    private static func inputChannelCount(_ objectID: AudioObjectID) -> Int {
+    private static func channelCount(_ objectID: AudioObjectID,
+                                     scope: AudioObjectPropertyScope) -> Int {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStreamConfiguration,
-            mScope: kAudioDevicePropertyScopeInput,
+            mScope: scope,
             mElement: kAudioObjectPropertyElementMain
         )
         var size: UInt32 = 0
@@ -84,19 +99,54 @@ public enum AudioDevices {
                 id: id,
                 name: stringProperty(id, kAudioObjectPropertyName),
                 uid: stringProperty(id, kAudioDevicePropertyDeviceUID),
-                inputChannels: inputChannelCount(id),
+                inputChannels: channelCount(id, scope: kAudioDevicePropertyScopeInput),
+                outputChannels: channelCount(id, scope: kAudioDevicePropertyScopeOutput),
                 sampleRate: property(id, kAudioDevicePropertyNominalSampleRate, default: 0.0)
             )
         }
     }
 
     public static func inputs() -> [AudioDevice] { all().filter(\.isInput) }
+    public static func outputs() -> [AudioDevice] { all().filter(\.isOutput) }
 
     public static func defaultInput() -> AudioDevice? {
         let id: AudioDeviceID = property(AudioObjectID(kAudioObjectSystemObject),
                                          kAudioHardwarePropertyDefaultInputDevice,
                                          default: 0)
         return inputs().first { $0.id == id }
+    }
+
+    public static func defaultOutput() -> AudioDevice? {
+        let id: AudioDeviceID = property(AudioObjectID(kAudioObjectSystemObject),
+                                         kAudioHardwarePropertyDefaultOutputDevice,
+                                         default: 0)
+        return outputs().first { $0.id == id }
+    }
+
+    /// Make this the system input. This is the half of a Bluetooth headset we
+    /// actually want.
+    public static func setDefaultInput(_ device: AudioDevice) throws {
+        try setDefault(device, selector: kAudioHardwarePropertyDefaultInputDevice)
+    }
+
+    /// Make this the system output — used to *undo* the mic taking over playback,
+    /// never to hand it playback.
+    public static func setDefaultOutput(_ device: AudioDevice) throws {
+        try setDefault(device, selector: kAudioHardwarePropertyDefaultOutputDevice)
+    }
+
+    private static func setDefault(_ device: AudioDevice,
+                                   selector: AudioObjectPropertySelector) throws {
+        var address = AudioObjectPropertyAddress(
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var id = device.id
+        let status = AudioObjectSetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil,
+            UInt32(MemoryLayout<AudioDeviceID>.size), &id)
+        guard status == noErr else { throw AudioDeviceError.setDeviceFailed(status) }
     }
 
     /// Point an engine's input node at a specific device.

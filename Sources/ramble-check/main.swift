@@ -1,3 +1,4 @@
+import CoreAudio
 import Foundation
 import RambleCore
 
@@ -884,6 +885,100 @@ expectEqual(BLEState.unsupported.abortReason, "Bluetooth unavailable",
 expect(BLEState.connected("Instamic").abortReason == nil, "a connected take continues")
 expect(BLEState.connecting("Instamic").abortReason == nil, "so does a connecting one")
 expect(BLEState.scanning.abortReason == nil, "and scanning never aborts a take")
+
+// ── audio routing ─────────────────────────────────────────────────────────
+//
+// A Bluetooth mic is an HFP device, and HFP is a headset profile: there is no
+// mic-only connection to ask for. Connecting one for its microphone hands macOS
+// a speaker too, and macOS takes it — dropping all system audio to 16 kHz mono.
+// These rules claim the input and give playback straight back.
+
+func dev(_ id: UInt32, _ name: String, inCh: Int = 0, outCh: Int = 0) -> AudioDevice {
+    AudioDevice(id: AudioDeviceID(id), name: name, uid: "uid-\(id)",
+                inputChannels: inCh, outputChannels: outCh)
+}
+
+let mic      = dev(1, "Instamic", inCh: 1, outCh: 1)   // both halves, as HFP gives it
+let speakers = dev(2, "MacBook Pro Speakers", outCh: 2)
+let monitor  = dev(3, "DELL U3225QE", outCh: 2)
+let builtIn  = dev(4, "MacBook Pro Microphone", inCh: 1)
+let all = [mic, speakers, monitor, builtIn]
+
+group("audio routing claims the mic and hands playback back")
+do {
+    // Exactly what connecting the mic does: it becomes both input and output.
+    let plan = AudioRouting.plan(devices: all, defaultInput: builtIn,
+                                 defaultOutput: mic, micName: "Instamic",
+                                 preferredOutput: "MacBook Pro Speakers")
+    expectEqual(plan.claimInput?.name, "Instamic", "the mic is claimed for input")
+    expectEqual(plan.restoreOutput?.name, "MacBook Pro Speakers",
+                "and playback goes back to the preferred output")
+    expect(!plan.connectBluetooth, "no need to connect — it is already present")
+}
+do {
+    // Already correct: this runs every 5s, so it must do nothing.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: speakers, micName: "Instamic",
+                                 preferredOutput: "MacBook Pro Speakers")
+    expect(plan.isNoOp, "a correct setup is left completely alone")
+}
+do {
+    // No preference set — anything that is not the mic will do.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic",
+                                 preferredOutput: nil)
+    expect(plan.restoreOutput != nil, "playback is still taken off the mic")
+    expect(plan.restoreOutput?.name.contains("Instamic") == false,
+           "and never handed back to the mic itself")
+}
+do {
+    // The user deliberately picked a different output. Leave it be.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: monitor, micName: "Instamic",
+                                 preferredOutput: "MacBook Pro Speakers")
+    expect(plan.restoreOutput == nil,
+           "an output the mic did not steal is the user's business")
+}
+do {
+    // Mic absent entirely: the Bluetooth link is down.
+    let plan = AudioRouting.plan(devices: [speakers, builtIn], defaultInput: builtIn,
+                                 defaultOutput: speakers, micName: "Instamic",
+                                 preferredOutput: nil)
+    expect(plan.connectBluetooth, "an absent mic means connect the link first")
+    expect(plan.claimInput == nil, "and nothing to claim yet")
+}
+do {
+    // Present as an output only — no input half yet, so it is not usable.
+    let halfUp = dev(9, "Instamic", inCh: 0, outCh: 1)
+    let plan = AudioRouting.plan(devices: [halfUp, speakers, builtIn],
+                                 defaultInput: builtIn, defaultOutput: speakers,
+                                 micName: "Instamic", preferredOutput: nil)
+    expect(plan.connectBluetooth, "an output-only mic is not connected for input yet")
+}
+do {
+    // Matching is by substring and case-insensitive.
+    let plan = AudioRouting.plan(devices: all, defaultInput: builtIn,
+                                 defaultOutput: speakers, micName: "instamic",
+                                 preferredOutput: nil)
+    expectEqual(plan.claimInput?.name, "Instamic", "device matching ignores case")
+}
+
+group("audio settings decode with safe defaults")
+do {
+    let json = "{}"
+    let c = try! JSONDecoder().decode(Config.self, from: Data(json.utf8))
+    expect(!c.audio.autoConnect, "audio routing is off unless asked for")
+    expectEqual(c.audio.device, "Instamic", "and defaults to the Instamic")
+
+    let on = """
+    {"audio":{"autoConnect":true,"device":"Instamic","preferredOutput":"MacBook Pro Speakers"}}
+    """
+    let c2 = try! JSONDecoder().decode(Config.self, from: Data(on.utf8))
+    expect(c2.audio.autoConnect, "and turns on when asked")
+    expectEqual(c2.audio.preferredOutput, "MacBook Pro Speakers", "carrying the output preference")
+    let round = try! JSONDecoder().decode(Config.self, from: JSONEncoder().encode(c2))
+    expectEqual(round.audio, c2.audio, "audio settings survive a round trip")
+}
 
 // ── config on disk ────────────────────────────────────────────────────────
 //

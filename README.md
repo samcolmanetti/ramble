@@ -136,6 +136,29 @@ rule. Otherwise you'd leave the first app recording forever.
 
 </details>
 
+### 🔊 Letting Ramble manage the mic
+
+macOS will not reconnect a Bluetooth mic on its own, and when it does connect
+one it takes the speakers too — dropping all system audio to 16 kHz mono.
+
+```json
+"audio": {
+  "autoConnect": true,
+  "device": "Instamic",
+  "preferredOutput": "MacBook Pro Speakers"
+}
+```
+
+Ramble then brings the mic up, makes it the system **input**, and hands playback
+straight back to `preferredOutput`. It re-checks every few seconds, because macOS
+grabs the output again every time the headset link returns.
+
+> [!NOTE]
+> **There is no mic-only Bluetooth connection.** A wireless mic speaks HFP, which
+> is a *headset* profile — connecting it for the microphone unavoidably offers
+> macOS a speaker as well. Ramble can't prevent that; it just refuses to let the
+> speaker stick. Off by default, since it changes system state.
+
 <details>
 <summary><b>📋 Every other option</b></summary>
 

@@ -10,32 +10,42 @@ a parser bug surfaces here rather than looking like a protocol mystery later.
 
 ---
 
-## 0. Put the Instamic in Remote Control Mode
+## 0. Put the Instamic in Bluetooth Microphone Mode
 
-BLE and Classic audio are mutually exclusive on this device (handoff §2). If the
-Mac still shows the Instamic as an audio device, it's in Bluetooth Microphone
-Mode and the button is invisible over BLE.
+> This step used to say **Remote Control Mode**, on the handoff's §2 claim that
+> BLE and Classic audio are mutually exclusive. That claim is false — see the
+> headline finding in [FINDINGS.md](FINDINGS.md), measured in
+> `captures/mode-bluetooth-mic.log`. Following the old instruction gives you a
+> working button and **no audio**, which is exactly half a dictation trigger.
 
-Check:
+Set the mode in the Instamic Remote app, then **quit that app** — the device
+accepts exactly one BLE central, and while the official app holds it, neither
+Ramble nor `ramble-sniff` can ever connect.
+
+Switching modes may need a power cycle of the unit, not just a toggle in the app.
+
+You want *both* links up at once. Check Classic:
 
 ```sh
 system_profiler SPBluetoothDataType | grep -A6 'Instamic'
 ```
 
-- `Services: 0x800001 < HFP ACL >` → **wrong mode.** It's a microphone right now.
-- Absent from the connected list entirely → good sign; Classic is down.
+- `Services: 0x1800001 < HFP ACL SCO >` → **right.** `SCO` is the channel
+  actually carrying voice, not just a control link.
+- Absent from the connected list → the audio half is down; the button may still
+  work, but nothing will be transcribed.
 
-Also confirm it stopped hijacking audio:
+And confirm the Mac is really listening to it:
 
 ```sh
-system_profiler SPAudioDataType | grep -B4 'Default Input Device: Yes'
+ramble-level --list        # the Instamic should appear, at 16000 Hz
 ```
 
-If the Instamic is still your default input, Classic is still up. Switching
-modes may need a power cycle of the unit, not just a toggle in the app.
+16 kHz mono is the HFP rate, and also Whisper's native input rate, so it costs
+nothing in transcription quality.
 
-**Quit the Instamic Remote app before continuing.** The device accepts exactly
-one BLE central; if the official app holds it, `ramble-sniff` will scan forever.
+> **Set Sound *output* back to your speakers.** macOS routes both directions to
+> a Bluetooth headset by default, which drops all system audio to 16 kHz.
 
 ---
 

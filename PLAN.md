@@ -54,6 +54,14 @@ SPM produces the executable, a script assembles `Ramble.app` (binary + `Info.pli
 so nothing is lost except the Xcode GUI. If full Xcode gets installed later,
 the package opens directly in it with no migration.
 
+One thing *is* lost: **`swift test` does not work.** Both XCTest and
+swift-testing ship inside Xcode, not the CLT, so a `testTarget` fails to compile
+with `no such module 'XCTest'`. Rather than make a multi-gigabyte Xcode install a
+prerequisite for running tests, the suite is a plain executable — `swift run
+ramble-check` — with a ~20-line assertion harness. It exits non-zero on failure,
+so CI treats it like any other test command, and porting to XCTest later is
+mechanical.
+
 ### Codesigning and TCC — plan for this early
 
 Ramble needs two TCC permissions: **Bluetooth** (CoreBluetooth) and
@@ -88,8 +96,8 @@ ramble/
 │   │   ├── RuleEngine.swift     # frontmost bundle ID → action, with start/stop latch
 │   │   └── Config.swift         # ~/.config/ramble/config.json, load + watch
 │   ├── ramble-sniff/            # Phase 1 CLI: connect, decode, log
-│   └── Ramble/                  # Phase 3 menu bar app (AppKit, NSStatusItem)
-├── Tests/RambleCoreTests/       # frame parser + rule engine, no hardware needed
+│   ├── Ramble/                  # Phase 3 menu bar app (AppKit, NSStatusItem)
+│   └── ramble-check/            # test suite (see §2 — `swift test` is unavailable)
 ├── Scripts/
 │   ├── bundle.sh                # SPM binary → Ramble.app, Info.plist, codesign
 │   └── make-signing-cert.sh     # one-time self-signed cert setup

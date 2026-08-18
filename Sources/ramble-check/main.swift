@@ -137,6 +137,183 @@ expectEqual(event(0x02, [0x3A, 0x03, 0x4C]), .other(opcode: 0x02, payload: [0x3A
 expectEqual(event(0x03, [0x35, 0x00]), .other(opcode: 0x03, payload: [0x35, 0x00]),
             "0x03 with a 2-byte payload is not a trigger")
 
+// ── trigger machine ───────────────────────────────────────────────────────
+
+func frame(_ opcode: UInt8, _ payload: [UInt8]) -> RecordEvent {
+    RecordEvent(frame: Frame(opcode: opcode, payload: payload,
+                             checksum: Frame.checksum(opcode: opcode, payload: payload)))
+}
+let START = frame(0x03, [0x35])
+let STOP_PRESS = frame(0x02, [0x44, 0x02])
+let STOP_STATE = frame(0x03, [0x36])
+let START_PRESS = frame(0x02, [0x48, 0x02])
+
+/// Records what would have been typed, so the state machine can be tested
+/// without an Accessibility grant.
+final class FakeKeystroke: KeystrokeEmitting {
+    var taps: [String] = []
+    var pressed: [String] = []
+    var released: [String] = []
+    func tap(_ chord: KeyChord) throws { taps.append(chord.description) }
+    func press(_ chord: KeyChord) throws { pressed.append(chord.description) }
+    func release(_ chord: KeyChord) throws { released.append(chord.description) }
+}
+
+func machine(frontmost: String?, mode: TriggerMode = .toggle)
+    -> (TriggerMachine, () -> [String], FakeKeystroke) {
+    var shellCalls: [String] = []
+    let config = Config(
+        mode: mode,
+        defaultRule: Rule(name: "default", bundleIDs: [],
+                          onStart: Action(key: "d", mods: ["cmd"]),
+                          onStop: Action(key: "d", mods: ["cmd"])),
+        rules: [
+            Rule(name: "terminal", bundleIDs: ["com.mitchellh.ghostty"],
+                 onStart: Action(key: "space"), onStop: Action(key: "space")),
+            Rule(name: "muted", bundleIDs: ["com.example.secret"],
+                 onStart: nil, onStop: nil),
+            Rule(name: "shelly", bundleIDs: ["com.example.shell"],
+                 onStart: Action(shell: "echo hi"), onStop: nil),
+        ]
+    )
+    let keys = FakeKeystroke()
+    let current = frontmost
+    let m = TriggerMachine(config: config,
+                           frontmostBundleID: { current },
+                           runShell: { shellCalls.append($0) },
+                           keystroke: keys)
+    return (m, { shellCalls }, keys)
+}
+
+func ruleName(_ o: TriggerOutcome) -> String? {
+    switch o {
+    case .fired(_, let r, _), .nothingConfigured(_, let r): return r
+    default: return nil
+    }
+}
+func actionOf(_ o: TriggerOutcome) -> String? {
+    if case .fired(_, _, let a) = o { return a }
+    return nil
+}
+func isIgnored(_ o: TriggerOutcome) -> Bool {
+    if case .ignored = o { return true }
+    return false
+}
+
+group("keycode and chord parsing")
+expectEqual(Keys.code(for: "space"), 49, "space is keycode 49")
+expectEqual(Keys.code(for: "D"), 2, "key lookup is case-insensitive")
+expect(Keys.code(for: "nope") == nil, "unknown key returns nil")
+switch KeyChord.parse(key: "d", mods: ["ctrl", "opt", "cmd"]) {
+case .success(let c): expectEqual(c.description, "⌃⌥⌘D", "chord renders as ⌃⌥⌘D")
+case .failure(let e): expect(false, "chord parse failed: \(e)")
+}
+expectEqual(KeyChord.parse(key: "d", mods: ["hyper"]).failureValue,
+            .unknownModifier("hyper"), "unknown modifier rejected")
+expectEqual(KeyChord.parse(key: "nope", mods: []).failureValue,
+            .unknownKey("nope"), "unknown key rejected")
+
+group("rule selection by frontmost app")
+let cfg = machine(frontmost: nil).0.config
+expectEqual(cfg.rule(for: "com.mitchellh.ghostty").name, "terminal", "matching bundle ID wins")
+expectEqual(cfg.rule(for: "COM.MITCHELLH.GHOSTTY").name, "terminal", "bundle match is case-insensitive")
+expectEqual(cfg.rule(for: "com.unknown.app").name, "default", "unmatched app falls back to default")
+expectEqual(cfg.rule(for: nil).name, "default", "nil frontmost falls back to default")
+
+group("stop fires on the press frame, not the delayed state frame")
+do {
+    let (m, _, _) = machine(frontmost: "com.mitchellh.ghostty")
+    let started = m.handle(START)
+    expectEqual(actionOf(started), "SPACE", "start fires the terminal rule")
+    expect(m.isRecording, "machine is recording after start")
+
+    let stopped = m.handle(STOP_PRESS)
+    expectEqual(actionOf(stopped), "SPACE", "02 [44 02] fires the stop")
+    expect(!m.isRecording, "machine is idle after stop press")
+
+    // 0x36 arrives 1.0-1.6s later; it must not fire a second keystroke.
+    expect(isIgnored(m.handle(STOP_STATE)), "trailing 0x36 does not double-fire")
+}
+
+group("0x36 still works as a fallback if the press frame is missed")
+do {
+    let (m, _, _) = machine(frontmost: nil)
+    _ = m.handle(START)
+    expectEqual(actionOf(m.handle(STOP_STATE)), "⌘D", "0x36 alone still stops")
+    expect(!m.isRecording, "machine is idle after fallback stop")
+}
+
+group("rule is latched at start, not re-resolved at stop")
+do {
+    var frontmost: String? = "com.mitchellh.ghostty"
+    let config = machine(frontmost: nil).0.config
+    let keys = FakeKeystroke()
+    let m = TriggerMachine(config: config, frontmostBundleID: { frontmost },
+                           runShell: { _ in }, keystroke: keys)
+    expectEqual(actionOf(m.handle(START)), "SPACE", "started in the terminal")
+    // User switches to another app mid-dictation.
+    frontmost = "com.unknown.app"
+    expectEqual(actionOf(m.handle(STOP_PRESS)), "SPACE",
+                "stop replays the terminal rule, not the new app's")
+    expectEqual(keys.taps, ["SPACE", "SPACE"], "both keystrokes went to the terminal chord")
+}
+
+group("push-to-talk mode holds the key across the take")
+do {
+    let (m, _, keys) = machine(frontmost: "com.mitchellh.ghostty", mode: .hold)
+    _ = m.handle(START)
+    expectEqual(keys.pressed, ["SPACE"], "hold mode presses on start")
+    expectEqual(keys.released, [], "hold mode has not released yet")
+    _ = m.handle(STOP_PRESS)
+    expectEqual(keys.released, ["SPACE"], "hold mode releases on stop")
+    expectEqual(keys.taps, [], "hold mode never taps")
+}
+
+group("connecting mid-recording does not fire a stray keystroke")
+do {
+    let (m, _, _) = machine(frontmost: nil)
+    // Exactly what the probe saw: a bare 0x36 with no preceding start.
+    expect(isIgnored(m.handle(STOP_STATE)), "bare 0x36 while idle is ignored")
+    expect(isIgnored(m.handle(STOP_PRESS)), "bare 02 [44 02] while idle is ignored")
+}
+
+group("duplicate and non-trigger frames")
+do {
+    let (m, _, _) = machine(frontmost: nil)
+    _ = m.handle(START)
+    expect(isIgnored(m.handle(START)), "duplicate start is ignored")
+    expect(isIgnored(m.handle(START_PRESS)), "02 [48 02] does not fire (0x35 follows)")
+    expect(isIgnored(m.handle(frame(0x04, [0x44, 0xFF]))), "0x04 is not a trigger")
+    expect(isIgnored(m.handle(frame(0x02, [0x3A, 0x03, 0x4C]))), "other 0x02 payloads are not triggers")
+    expect(isIgnored(m.handle(frame(0x03, [0x37]))), "unknown 0x03 payload does not fire")
+}
+
+group("actions: muted apps and shell escape hatch")
+do {
+    let (m, _, _) = machine(frontmost: "com.example.secret")
+    if case .nothingConfigured(_, let rule) = m.handle(START) {
+        expectEqual(rule, "muted", "an app with null actions fires nothing")
+    } else {
+        expect(false, "muted app should report nothingConfigured")
+    }
+    expect(m.isRecording, "muted app still tracks state so its stop is consumed")
+}
+do {
+    let (m, shellCalls, _) = machine(frontmost: "com.example.shell")
+    _ = m.handle(START)
+    expectEqual(shellCalls(), ["echo hi"], "shell action runs the command")
+}
+
+group("config round-trips through JSON")
+do {
+    let original = Config.starter()
+    let data = try! JSONEncoder().encode(original)
+    let decoded = try! JSONDecoder().decode(Config.self, from: data)
+    expectEqual(decoded, original, "starter config survives encode/decode")
+    expectEqual(decoded.rule(for: "com.mitchellh.ghostty").onStart?.summary, "⇧SPACE",
+                "starter config maps the terminal to ⇧Space, matching keybindings.json")
+}
+
 print("""
 
 ────────────────────────────────────────────

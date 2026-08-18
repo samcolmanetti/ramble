@@ -13,6 +13,8 @@ if args.contains("--help") || args.contains("-h") {
     usage: ramble-sniff [options]
 
       -v, --verbose   log every BLE advertisement seen, not just the Instamic
+          --fire      actually send the configured hotkeys (needs Accessibility)
+          --config <path>  config file, default ~/.config/ramble/config.json
           --poll <s>  also poll the FCC1 config service every <s> seconds and
                       log any value that changes -- used to locate the battery
                       field and chart real drain
@@ -48,6 +50,18 @@ let narrow = args.contains("--narrow")
 // Live monitoring tool: never let stdout block-buffer, or piping into `tee`
 // swallows everything until exit.
 setvbuf(stdout, nil, _IONBF, 0)
+
+// --fire, --config
+let shouldFire = args.contains("--fire")
+var configPath = Config.path
+do {
+    let all = Array(CommandLine.arguments)
+    if let i = all.firstIndex(of: "--config"), i + 1 < all.count {
+        configPath = URL(fileURLWithPath: (all[i + 1] as NSString).expandingTildeInPath)
+    }
+}
+
+var machine: TriggerMachine? = nil
 
 let started = Date()
 func stamp() -> String {
@@ -162,10 +176,31 @@ final class Sniffer: BLEClientDelegate {
             } else {
                 line += "   ■ RECORD STOP   ⚠️ no matching start"
             }
+        case .stopPress:
+            if let s = takeStart {
+                line += String(format: "   ⏹ button press (stop)  held %.2fs", Date().timeIntervalSince(s))
+            } else {
+                line += "   ⏹ button press (stop)"
+            }
+        case .startPress:
+            line += "   ⏺ button press (start)"
         case .unknownRecordState(let b):
             line += String(format: "   ⚠️ opcode 0x03 with unknown payload 0x%02X", b)
         case .other:
             break
+        }
+
+        if let machine {
+            switch machine.handle(event) {
+            case .fired(let phase, let rule, let action):
+                line += "\n\(String(repeating: " ", count: 14))→ \(phase.rawValue) fired \(action)  [\(rule)]"
+            case .nothingConfigured(let phase, let rule):
+                line += "\n\(String(repeating: " ", count: 14))→ \(phase.rawValue): no action configured for [\(rule)]"
+            case .failed(let phase, let reason):
+                line += "\n\(String(repeating: " ", count: 14))→ \(phase.rawValue) FAILED: \(reason)"
+            case .ignored:
+                break
+            }
         }
         print(line)
     }
@@ -238,6 +273,37 @@ case .notDetermined:
     print("Bluetooth permission not yet granted — macOS should prompt shortly.")
 default:
     break
+}
+
+if shouldFire {
+    do {
+        let (config, created) = try Config.loadOrCreate(at: configPath)
+        if created {
+            print("wrote a starter config to \(configPath.path) — edit it to set your hotkeys")
+        }
+        if !Keystroke.isTrusted {
+            print("""
+
+            ⚠️  Accessibility permission is not granted, so no keystroke can be
+                posted. macOS attributes this to the app that launched the
+                process, so grant it to your terminal under
+                System Settings → Privacy & Security → Accessibility.
+            """)
+            Keystroke.requestTrust()
+        }
+        machine = TriggerMachine(config: config)
+        print("firing enabled — mode: \(config.mode.rawValue), \(config.rules.count) app rules")
+        print("  default: start \(config.defaultRule.onStart?.summary ?? "nothing")"
+            + " / stop \(config.defaultRule.onStop?.summary ?? "nothing")")
+        for rule in config.rules {
+            print("  \(rule.name ?? rule.bundleIDs.joined(separator: ",")): "
+                + "start \(rule.onStart?.summary ?? "nothing")"
+                + " / stop \(rule.onStop?.summary ?? "nothing")")
+        }
+    } catch {
+        print("could not load config at \(configPath.path): \(error)")
+        exit(1)
+    }
 }
 
 let sniffer = Sniffer()

@@ -11,7 +11,9 @@ cd "$(dirname "$0")/.."
 
 CONFIG=debug
 IDENTITY="${RAMBLE_SIGN_IDENTITY:-Ramble Dev}"
-VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)"
+# release.sh sets this so a released bundle reports the version being
+# released. Left unset, a dev build reports the commit it came from.
+VERSION="${RAMBLE_VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)}"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 
 while [[ $# -gt 0 ]]; do

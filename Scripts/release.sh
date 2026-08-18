@@ -32,7 +32,9 @@ REPO="samcolmanetti/ramble"
 ZIP="build/Ramble-v${VERSION}.zip"
 
 echo "▸ building release bundle"
-./Scripts/bundle.sh --release >/dev/null
+# Without this the bundle reports `git describe` — a bare commit hash until the
+# first tag exists — while the cask advertises the real version.
+RAMBLE_VERSION="$VERSION" ./Scripts/bundle.sh --release >/dev/null
 
 echo "▸ packaging $ZIP"
 rm -f "$ZIP"

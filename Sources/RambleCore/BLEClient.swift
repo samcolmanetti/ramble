@@ -4,6 +4,14 @@ import Foundation
 public let instamicServiceUUID = CBUUID(string: "FF10")
 public let instamicNotifyUUID = CBUUID(string: "FF11")
 
+/// The Instamic Remote app's command/config channel. Untouched by the trigger
+/// path; polled only when explicitly asked for, to look for battery telemetry.
+public let instamicConfigServiceUUID = CBUUID(string: "FCC1")
+
+/// Reading this one returns GATT error 133, twice, reproducibly (handoff §3).
+/// It likely needs encryption or an app-level handshake. Never read it.
+private let poisonCharacteristicPrefix = "F9C13107" 
+
 public enum BLEState: Equatable {
     case poweredOff
     case unauthorized
@@ -22,6 +30,8 @@ public protocol BLEClientDelegate: AnyObject {
     /// this is how we tell "device is in HFP mode" from "device isn't advertising".
     func bleDidSee(peripheral: CBPeripheral, advertisement: [String: Any], rssi: NSNumber)
     func bleDidReceive(frame: Frame, event: RecordEvent, raw: [UInt8])
+    /// A value read from (or pushed by) the FCC1 config service.
+    func bleDidReadConfig(uuid: String, value: [UInt8], pushed: Bool)
     func bleDidReceiveMalformed(raw: [UInt8], error: FrameError)
     func bleLog(_ message: String)
 }
@@ -29,6 +39,7 @@ public protocol BLEClientDelegate: AnyObject {
 public extension BLEClientDelegate {
     func bleDidSee(peripheral: CBPeripheral, advertisement: [String: Any], rssi: NSNumber) {}
     func bleDidReceiveMalformed(raw: [UInt8], error: FrameError) {}
+    func bleDidReadConfig(uuid: String, value: [UInt8], pushed: Bool) {}
     func bleLog(_ message: String) {}
 }
 
@@ -52,12 +63,18 @@ public final class BLEClient: NSObject {
     /// Used by `ramble-sniff --scan-only` to answer "is it advertising at all?"
     /// without taking the device's single central slot.
     public var connectOnMatch: Bool = true
+    /// When set, discover the FCC1 config service and re-read its readable
+    /// characteristics on this interval. Used to hunt for a battery field and
+    /// chart real drain rather than trusting vendor specs.
+    public var configPollInterval: TimeInterval?
 
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
     private var notifyCharacteristic: CBCharacteristic?
     private var reconnectDelay: TimeInterval = 1
     private var seenAdvertisements = Set<UUID>()
+    private var pollableCharacteristics: [CBCharacteristic] = []
+    private var pollTimer: DispatchSourceTimer?
 
     public override init() {
         super.init()
@@ -70,8 +87,33 @@ public final class BLEClient: NSObject {
     }
 
     public func stop() {
+        stopPolling()
         central.stopScan()
         if let p = peripheral { central.cancelPeripheralConnection(p) }
+    }
+
+    private func stopPolling() {
+        pollTimer?.cancel()
+        pollTimer = nil
+        pollableCharacteristics.removeAll()
+    }
+
+    private func startPolling(interval: TimeInterval) {
+        stopPollingTimerOnly()
+        guard !pollableCharacteristics.isEmpty else { return }
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now(), repeating: interval)
+        timer.setEventHandler { [weak self] in
+            guard let self, let p = self.peripheral else { return }
+            for ch in self.pollableCharacteristics { p.readValue(for: ch) }
+        }
+        timer.resume()
+        pollTimer = timer
+    }
+
+    private func stopPollingTimerOnly() {
+        pollTimer?.cancel()
+        pollTimer = nil
     }
 
     private func beginScan() {
@@ -176,6 +218,7 @@ extension BLEClient: CBCentralManagerDelegate {
                                error: Error?) {
         notifyCharacteristic = nil
         self.peripheral = nil
+        stopPolling()
         delegate?.bleStateChanged(.disconnected(error?.localizedDescription))
         scheduleReconnect()
     }
@@ -204,6 +247,11 @@ extension BLEClient: CBPeripheralDelegate {
         // Prefer FF10 per the handoff's GATT dump, but the advertised UUID was
         // FF11 — so if FF10 is absent, sweep every service for the notify
         // characteristic rather than giving up.
+        if configPollInterval != nil,
+           let config = services.first(where: { $0.uuid == instamicConfigServiceUUID }) {
+            peripheral.discoverCharacteristics(nil, for: config)
+        }
+
         if let service = services.first(where: { $0.uuid == instamicServiceUUID }) {
             peripheral.discoverCharacteristics(nil, for: service)
         } else if services.isEmpty {
@@ -228,6 +276,19 @@ extension BLEClient: CBPeripheralDelegate {
             let described = chars.map { "\($0.uuid.uuidString)\(props($0.properties))" }
             delegate?.bleLog("  \(service.uuid.uuidString): \(described.joined(separator: " "))")
         }
+        if service.uuid == instamicConfigServiceUUID, let interval = configPollInterval {
+            let readable = chars.filter {
+                $0.properties.contains(.read)
+                    && !$0.uuid.uuidString.uppercased().hasPrefix(poisonCharacteristicPrefix)
+            }
+            let skipped = chars.count - readable.count
+            pollableCharacteristics = readable
+            delegate?.bleLog("FCC1: polling \(readable.count) readable characteristics"
+                + " every \(Int(interval))s (\(skipped) skipped)")
+            startPolling(interval: interval)
+            return
+        }
+
         guard notifyCharacteristic == nil,
               let ch = chars.first(where: { $0.uuid == instamicNotifyUUID }) else { return }
 
@@ -241,6 +302,14 @@ extension BLEClient: CBPeripheralDelegate {
                            error: Error?) {
         guard let data = characteristic.value else { return }
         let raw = [UInt8](data)
+
+        if characteristic.service?.uuid == instamicConfigServiceUUID {
+            delegate?.bleDidReadConfig(uuid: characteristic.uuid.uuidString,
+                                       value: raw,
+                                       pushed: characteristic.isNotifying)
+            return
+        }
+
         switch Frame.parse(raw) {
         case .success(let frame):
             delegate?.bleDidReceive(frame: frame, event: RecordEvent(frame: frame), raw: raw)

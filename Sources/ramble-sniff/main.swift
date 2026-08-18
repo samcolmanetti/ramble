@@ -13,6 +13,9 @@ if args.contains("--help") || args.contains("-h") {
     usage: ramble-sniff [options]
 
       -v, --verbose   log every BLE advertisement seen, not just the Instamic
+          --poll <s>  also poll the FCC1 config service every <s> seconds and
+                      log any value that changes -- used to locate the battery
+                      field and chart real drain
           --scan-only scan and list advertisements, never connect
           --narrow    filter on service FF10 in the scan call itself
                       (faster, but invisible if FF10 isn't in the advert)
@@ -26,6 +29,19 @@ if args.contains("--help") || args.contains("-h") {
 }
 
 let verbose = args.contains("-v") || args.contains("--verbose")
+
+// --poll <seconds>
+var pollInterval: TimeInterval? = nil
+do {
+    let all = Array(CommandLine.arguments)
+    if let i = all.firstIndex(of: "--poll") {
+        guard i + 1 < all.count, let v = Double(all[i + 1]), v >= 1 else {
+            print("--poll needs an interval in seconds (minimum 1)")
+            exit(2)
+        }
+        pollInterval = v
+    }
+}
 let scanOnly = args.contains("--scan-only")
 let narrow = args.contains("--narrow")
 
@@ -154,6 +170,46 @@ final class Sniffer: BLEClientDelegate {
         print(line)
     }
 
+    // Per-characteristic history, so a long unattended run logs only what moved.
+    private var lastConfig: [String: [UInt8]] = [:]
+    private var configReadCount: [String: Int] = [:]
+    private static let heartbeatEvery = 20
+
+    func bleDidReadConfig(uuid: String, value: [UInt8], pushed: Bool) {
+        let short = String(uuid.prefix(8))
+        let count = (configReadCount[uuid] ?? 0) + 1
+        configReadCount[uuid] = count
+
+        let previous = lastConfig[uuid]
+        lastConfig[uuid] = value
+
+        guard let previous else {
+            print("\(stamp())  cfg \(short)  \(value.hex)   (\(value.count) bytes, first read)")
+            return
+        }
+        if previous == value {
+            // Unchanged values still get logged occasionally, so a flat battery
+            // trace is distinguishable from polling having silently stopped.
+            if count % Self.heartbeatEvery == 0 {
+                print("\(stamp())  cfg \(short)  \(value.hex)   (unchanged ×\(Self.heartbeatEvery))")
+            }
+            return
+        }
+
+        var deltas: [String] = []
+        for i in 0 ..< max(previous.count, value.count) {
+            let a = i < previous.count ? previous[i] : nil
+            let b = i < value.count ? value[i] : nil
+            if a != b {
+                deltas.append(String(format: "[%d] %@→%@", i,
+                                     a.map { String(format: "%02X", $0) } ?? "--",
+                                     b.map { String(format: "%02X", $0) } ?? "--"))
+            }
+        }
+        let tag = pushed ? "push" : "cfg "
+        print("\(stamp())  \(tag)\(short)  \(value.hex)   Δ \(deltas.joined(separator: " "))")
+    }
+
     func summary() {
         print("""
 
@@ -162,6 +218,12 @@ final class Sniffer: BLEClientDelegate {
         frames       \(frameCount)
         takes        \(takeCount)
         """)
+        if !lastConfig.isEmpty {
+            print("\n        final FCC1 values:")
+            for (uuid, value) in lastConfig.sorted(by: { $0.key < $1.key }) {
+                print("          \(String(uuid.prefix(8)))  \(value.hex)")
+            }
+        }
     }
 }
 
@@ -185,10 +247,14 @@ client.verbose = verbose || scanOnly
 client.scanWide = !narrow
 client.autoReconnect = !scanOnly
 client.connectOnMatch = !scanOnly
+client.configPollInterval = pollInterval
 
 print("ramble-sniff — ctrl-C to stop")
 if scanOnly {
     print("scan-only: listing advertisements, will not connect")
+}
+if let pollInterval {
+    print("polling FCC1 every \(Int(pollInterval))s (f9c13107 excluded — returns GATT error 133)")
 }
 
 // CoreBluetooth reports its state within milliseconds when it can talk to the

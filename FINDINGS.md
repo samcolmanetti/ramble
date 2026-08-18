@@ -198,6 +198,56 @@ Phase 4, not now.
   was already recording and saw a bare `03 [36]` with no preceding `35`. The app
   must treat a stop-without-start as benign and not fire a stray hotkey.
 
+## The FCC1 config service, decoded
+
+Polled with `ramble-sniff --poll 5`. Nine characteristics, four readable
+(`f9c13107` skipped — it reproducibly returns GATT error 133, as the handoff
+warned). Full UUIDs are `f9c131NN-59d4-11ed-9c9d-0800200c9a66`.
+
+| Characteristic | Bytes | Contents |
+|---|---|---|
+| `f9c13101` | 10 | `80 1B 60 C3 00 00 00 00 00 80` — static across the run |
+| `f9c13102` | 8 | ASCII **`Instamic`** — device name |
+| `f9c13105` | 1 | single byte, observed `E6` → `E2`. **Battery candidate** |
+| `f9c13108` | 64 | status block — see below |
+
+### `f9c13108` is the useful one
+
+```
+offset 5      02 → 03  while recording
+offset 6      00 → 01  while recording          ← clean boolean
+offset 7..15  ASCII "PINS_001"                  ← filename prefix
+offset 32..35 LE u32 = 32,808,716
+offset 38..41 LE u32 = 65,567,325
+```
+
+**Offset 6 is a live recording-state flag** — `00` idle, `01` recording,
+flipping exactly in step with the `0x35`/`0x36` notifications and reverting
+afterwards.
+
+This solves a problem flagged earlier: when Ramble connects while a recording is
+already in progress, it sees a bare `03 [36]` with no matching start and has no
+idea what state the device is in. Now it can simply **read offset 6 on connect**
+and know. No guessing, no stray hotkey.
+
+The two 32-bit counters are free and total storage — their ratio is 0.5004, and
+the magnitudes are consistent with a half-full card (16.8 GB of 33.6 GB if the
+unit is 512-byte sectors, or 33.6 GB of 67.1 GB if it is 1 KB). The unit is
+undetermined; a long recording would pin it down.
+
+Note that offset 32–33 (`0C 9F`) equals bytes 5–6 of the 9-byte notification
+frame in the same session. So the "counter that decrements with recording
+seconds" noted above is the low half of the free-space field — it was storage
+filling up, not a time budget.
+
+### Battery: `f9c13105`
+
+One byte, decreasing: `E6` (230) → `E2` (226) over roughly 15 seconds that
+included a 7.3 s recording. Too fast to be a percentage, so it is a raw ADC
+reading, a voltage, or a capacity counter in some device unit. **Characterizing
+it needs a long unattended poll**, which is what the battery-drain run is for.
+Until that lands, treat "which byte is battery" as a hypothesis.
+
 ## Still outstanding
 
 - **10-minute idle soak** — running. Confirms `0x03` and `02 [44 02]` never fire

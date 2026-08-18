@@ -77,16 +77,23 @@ public struct AudioSettings: Codable, Equatable {
     public var autoConnect: Bool
     /// Substring matched against device names, both Bluetooth and CoreAudio.
     public var device: String
-    /// Hand playback back to this when the mic takes it. Any output whose name
-    /// contains this wins; unset means "whatever else is available".
+    /// Hand playback back to this, overriding what Ramble learned. Set it only
+    /// if you want to name the output outright; normally leave it out.
     public var preferredOutput: String?
+    /// Written by Ramble, not you: the output that was in use before the mic
+    /// took playback. Persisted so the right answer survives a restart — at
+    /// login the mic can connect before Ramble ever sees a good output, and
+    /// without this it would have to guess.
+    public var lastOutput: String?
 
     public init(autoConnect: Bool = false,
                 device: String = "Instamic",
-                preferredOutput: String? = nil) {
+                preferredOutput: String? = nil,
+                lastOutput: String? = nil) {
         self.autoConnect = autoConnect
         self.device = device
         self.preferredOutput = preferredOutput
+        self.lastOutput = lastOutput
     }
 
     public init(from decoder: Decoder) throws {
@@ -94,6 +101,7 @@ public struct AudioSettings: Codable, Equatable {
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
         device = try c.decodeIfPresent(String.self, forKey: .device) ?? "Instamic"
         preferredOutput = try c.decodeIfPresent(String.self, forKey: .preferredOutput)
+        lastOutput = try c.decodeIfPresent(String.self, forKey: .lastOutput)
     }
 }
 

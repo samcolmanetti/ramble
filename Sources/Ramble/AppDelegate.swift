@@ -193,14 +193,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastMicOutcome: MicAttach.Outcome?
     private func attachMic() {
         guard config.audio.autoConnect else { return }
-        let outcome = MicAttach.run(micName: config.audio.device,
-                                    preferredOutput: config.audio.preferredOutput)
-        // Only speak up when something changed, or a 5s timer becomes a log spammer.
-        if outcome != lastMicOutcome, outcome != .alreadyRight {
-            EventLog.shared.write("audio: \(outcome.description)")
-            note(outcome.description)
+        let result = MicAttach.run(micName: config.audio.device,
+                                   preferredOutput: config.audio.preferredOutput,
+                                   rememberedOutput: config.audio.lastOutput)
+
+        // Remember where playback was, so the mic can hand it back next time.
+        // Written only on a real change, which is rare — this runs every 5s.
+        if let learned = result.learnedOutput, learned != config.audio.lastOutput {
+            config.audio.lastOutput = learned
+            if persistConfig() {
+                EventLog.shared.write("audio: will hand playback back to \(learned)")
+            }
         }
-        lastMicOutcome = outcome
+
+        // Only speak up when something changed, or a 5s timer becomes a log spammer.
+        if result.outcome != lastMicOutcome, result.outcome != .alreadyRight {
+            EventLog.shared.write("audio: \(result.outcome.description)")
+            note(result.outcome.description)
+        }
+        lastMicOutcome = result.outcome
     }
 
     // MARK: - Menu

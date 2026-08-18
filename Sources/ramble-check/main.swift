@@ -915,6 +915,57 @@ do {
                 "and playback goes back to the preferred output")
     expect(!plan.connectBluetooth, "no need to connect — it is already present")
 }
+
+group("the output to hand back to is learned, not configured")
+do {
+    // Playback is somewhere sensible: remember it for when the mic takes over.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: monitor, micName: "Instamic")
+    expectEqual(plan.rememberOutput, "DELL U3225QE",
+                "the output in honest use is worth remembering")
+    expect(plan.restoreOutput == nil, "and nothing needs restoring yet")
+}
+do {
+    // The mic holds playback, so there is nothing good to learn right now.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic")
+    expect(plan.rememberOutput == nil, "the mic holding playback teaches nothing")
+}
+do {
+    // The learned value is what playback goes back to — the monitor here, not
+    // the speakers, because that is where the user actually had it.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic",
+                                 preferredOutput: nil,
+                                 rememberedOutput: "DELL U3225QE")
+    expectEqual(plan.restoreOutput?.name, "DELL U3225QE",
+                "playback returns to where it was before the mic interrupted")
+}
+do {
+    // An explicit name in the config overrides what was learned.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic",
+                                 preferredOutput: "MacBook Pro Speakers",
+                                 rememberedOutput: "DELL U3225QE")
+    expectEqual(plan.restoreOutput?.name, "MacBook Pro Speakers",
+                "an explicit preference beats the learned one")
+}
+do {
+    // Learned a device that has since been unplugged: fall back, do not fail.
+    let plan = AudioRouting.plan(devices: [mic, speakers, builtIn], defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic",
+                                 preferredOutput: nil,
+                                 rememberedOutput: "DELL U3225QE")
+    expectEqual(plan.restoreOutput?.name, "MacBook Pro Speakers",
+                "a remembered output that is gone falls back to what is there")
+}
+do {
+    // Nothing learned yet and nothing configured — still get playback off the mic.
+    let plan = AudioRouting.plan(devices: all, defaultInput: mic,
+                                 defaultOutput: mic, micName: "Instamic")
+    expect(plan.restoreOutput != nil, "playback still comes off the mic regardless")
+    expect(plan.restoreOutput?.name.contains("Instamic") == false, "and never back to it")
+}
 do {
     // Already correct: this runs every 5s, so it must do nothing.
     let plan = AudioRouting.plan(devices: all, defaultInput: mic,
@@ -978,6 +1029,12 @@ do {
     expectEqual(c2.audio.preferredOutput, "MacBook Pro Speakers", "carrying the output preference")
     let round = try! JSONDecoder().decode(Config.self, from: JSONEncoder().encode(c2))
     expectEqual(round.audio, c2.audio, "audio settings survive a round trip")
+
+    var learned = c2
+    learned.audio.lastOutput = "DELL U3225QE"
+    let round2 = try! JSONDecoder().decode(Config.self, from: JSONEncoder().encode(learned))
+    expectEqual(round2.audio.lastOutput, "DELL U3225QE",
+                "the learned output persists across a restart")
 }
 
 // ── config on disk ────────────────────────────────────────────────────────

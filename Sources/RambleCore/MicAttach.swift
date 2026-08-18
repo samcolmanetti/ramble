@@ -31,18 +31,30 @@ public enum MicAttach {
         }
     }
 
+    /// The result of one pass, including anything worth persisting.
+    public struct Result {
+        public var outcome: Outcome
+        /// The output observed in honest use this pass. Worth writing to the
+        /// config when it differs from what is already stored.
+        public var learnedOutput: String?
+    }
+
     /// Run one pass. Safe to call repeatedly — it is a no-op once things are
     /// right, which is what makes it suitable for a timer.
     @discardableResult
-    public static func run(micName: String, preferredOutput: String?) -> Outcome {
+    public static func run(micName: String,
+                           preferredOutput: String?,
+                           rememberedOutput: String?) -> Result {
         let plan = AudioRouting.plan(devices: AudioDevices.all(),
                                      defaultInput: AudioDevices.defaultInput(),
                                      defaultOutput: AudioDevices.defaultOutput(),
                                      micName: micName,
-                                     preferredOutput: preferredOutput)
+                                     preferredOutput: preferredOutput,
+                                     rememberedOutput: rememberedOutput)
 
         if plan.connectBluetooth {
-            return connect(micName: micName)
+            return Result(outcome: connect(micName: micName),
+                          learnedOutput: plan.rememberOutput)
         }
 
         var claimed: String?
@@ -57,15 +69,17 @@ public enum MicAttach {
                 restored = output.name
             }
         } catch {
-            return .failed("\(error)")
+            return Result(outcome: .failed("\(error)"), learnedOutput: plan.rememberOutput)
         }
 
+        let outcome: Outcome
         switch (claimed, restored) {
-        case (nil, nil):            return .alreadyRight
-        case (let i?, nil):         return .claimedInput(i)
-        case (nil, let o?):         return .restoredOutput(o)
-        case (let i?, let o?):      return .claimedAndRestored(input: i, output: o)
+        case (nil, nil):            outcome = .alreadyRight
+        case (let i?, nil):         outcome = .claimedInput(i)
+        case (nil, let o?):         outcome = .restoredOutput(o)
+        case (let i?, let o?):      outcome = .claimedAndRestored(input: i, output: o)
         }
+        return Result(outcome: outcome, learnedOutput: plan.rememberOutput)
     }
 
     /// Open the Classic link to the paired mic.

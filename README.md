@@ -142,16 +142,17 @@ macOS will not reconnect a Bluetooth mic on its own, and when it does connect
 one it takes the speakers too — dropping all system audio to 16 kHz mono.
 
 ```json
-"audio": {
-  "autoConnect": true,
-  "device": "Instamic",
-  "preferredOutput": "MacBook Pro Speakers"
-}
+"audio": { "autoConnect": true, "device": "Instamic" }
 ```
 
 Ramble then brings the mic up, makes it the system **input**, and hands playback
-straight back to `preferredOutput`. It re-checks every few seconds, because macOS
-grabs the output again every time the headset link returns.
+straight back to wherever it already was. It re-checks every few seconds, because
+macOS grabs the output again every time the headset link returns.
+
+You don't name the output. Ramble watches where playback actually lives and
+writes it to `lastOutput`, so moving to your monitor or plugging in headphones
+just works, and the answer survives a restart. Set `"preferredOutput"` only if
+you want to override that.
 
 > [!NOTE]
 > **There is no mic-only Bluetooth connection.** A wireless mic speaks HFP, which
